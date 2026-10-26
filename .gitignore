@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.superpowers/
+.env
+.env.*
+packages/data/cache/
+*.log
+.DS_Store
+Thumbs.db
