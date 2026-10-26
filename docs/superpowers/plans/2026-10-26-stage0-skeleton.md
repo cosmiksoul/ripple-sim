@@ -20,6 +20,7 @@
 - Ни один тест не ходит в сеть. Сетевые вызовы только через `packages/data/pipeline/fetch.ts`, который вызывает `build.ts`; шаги плана с сетью помечены «(сеть)».
 - Бюджет: полный забег 1980→2025 двух миров в Node ≤ 3 с; `packages/data/out` ≤ 12 МБ.
 - Языки текстов контента: `ru` и `en` всегда вместе.
+- Очки события приходят через интерфейс `Scorer`; движок не знает, откуда они (в этапе 0 каталог, в версии 2.0 модель или ансамбль LLM с материализованными оценками). Оценщик чистый: никакой сети и состояния внутри тика.
 - Коммит после каждой задачи. Пуш делает пользователь (SSH).
 
 ## Структура файлов
@@ -2108,10 +2109,11 @@ git commit -m "feat(engine): causal journal with per-tick top-N and why() traver
 **Interfaces:**
 - Consumes: `WorldState`, `applyShock`, `DynParams`, `LinkGraph`, `Journal`, `IndicatorStore`, `chance`, схемы событий.
 - Produces:
-  - `class CatalogScorer { constructor(defs: EventTypeDef[]); def(typeId): EventTypeDef; score(typeId, magnitude): Record<Channel, number> }` — очки = `impact × magnitude / 3`.
+  - `interface ScoreContext { t: number; countries: number[] }`, `interface Scorer { def(typeId): EventTypeDef; score(ev: ScheduledEvent, ctx: ScoreContext): ChannelPoints }` — шов для будущих оценщиков (Jev, ансамбль LLM): они читают страны, текст и контекст, каталог их игнорирует. Оценщик обязан быть чистой функцией своих входов при фиксированной версии (ADR 0002).
+  - `class CatalogScorer implements Scorer { constructor(defs: EventTypeDef[]); def(typeId): EventTypeDef; points(typeId, magnitude): ChannelPoints; score(ev, ctx): ChannelPoints }` — очки = `impact × magnitude / 3`; `score` делегирует в `points`.
   - `type ApplyMode = 'embedded' | 'forward' | 'inverse'`.
   - `interface ActiveEvent { id; typeId; countries: number[]; global: boolean; points: Record<Channel, number>; startAbs; shockMonths; persistMonths; persistRatio; mode: ApplyMode; spreadBias }`.
-  - `makeActiveEvent(ev: ScheduledEvent, countries: number[], scorer, mode, startAbs): ActiveEvent`, `monthlyFactor(ev, t)`, `isExpired(ev, t)`.
+  - `makeActiveEvent(ev: ScheduledEvent, countries: number[], scorer: Scorer, mode, startAbs): ActiveEvent`, `monthlyFactor(ev, t)`, `isExpired(ev, t)`.
   - `interface ImpactContext { state; params; meta; countries: Country[]; indicatorIndex; channels: ChannelMap; graph; spill: EngineConfig['spill']; journal; todayAbs }`, `insideData(ctx, i, c, t)` (ряд страны `c` ещё несёт реальный эффект: `t ≤ min(realUntil(i), todayAbs)` и страна не пережила свой реальный конец), `appliesTo(mode, inside)`, `applyActiveEvents(active, t, ctx)`.
   - `interface HandoverContext { countries: Country[]; transitions: Map<string, Transition>; groupOf(type): EventGroup; retarget: ReadonlySet<EventGroup> }` (только мир игрока; событие с переходом «якорится» на первой стране `from` перехода, иначе на первой стране списка), `interface SchedulerContext { t; state; baselineX?: Float32Array; countryIndex; indicatorIndex; graph; mirror?: Map<string, ScheduledEvent>; handover?: HandoverContext }`.
   - `interface Firing { event: ScheduledEvent; mode: ApplyMode }`, `interface TickResult { firings: Firing[]; delayed: string[]; cancelled: string[]; retargeted: Array<{ id; from: string; to: string }>; diverged: string[] }`.
@@ -2123,19 +2125,24 @@ git commit -m "feat(engine): causal journal with per-tick top-N and why() traver
 `packages/engine/test/catalog.test.ts`:
 ```ts
 import { describe, expect, it } from 'vitest';
+import type { ScheduledEvent } from '@ripple/schema';
 import { loadContent } from '@ripple/content';
 import { CatalogScorer } from '@ripple/engine';
 
 describe('CatalogScorer', () => {
   const s = new CatalogScorer(loadContent().eventTypes);
   it('scales catalog points by magnitude/3', () => {
-    expect(s.score('war', 3).safety).toBeCloseTo(-15, 6);
-    expect(s.score('war', 5).safety).toBeCloseTo(-25, 6);
-    expect(s.score('war', 1).info).toBe(0);
-    expect(s.score('investment', 3).econ).toBeCloseTo(6, 6);
+    expect(s.points('war', 3).safety).toBeCloseTo(-15, 6);
+    expect(s.points('war', 5).safety).toBeCloseTo(-25, 6);
+    expect(s.points('war', 1).info).toBe(0);
+    expect(s.points('investment', 3).econ).toBeCloseTo(6, 6);
+  });
+  it('scores an event from its type and magnitude only', () => {
+    const ev: ScheduledEvent = { id: 'x', type: 'war', origin: 'player', year: 1990, month: 1, countries: ['A'], scope: 'list', magnitude: 5, preconditions: [], delayMaxYears: 0, hooks: [] };
+    expect(s.score(ev, { t: 0, countries: [0] })).toEqual(s.points('war', 5));
   });
   it('throws on unknown type', () => {
-    expect(() => s.score('nope', 3)).toThrow(/unknown event type/);
+    expect(() => s.points('nope', 3)).toThrow(/unknown event type/);
   });
 });
 ```
@@ -2436,11 +2443,24 @@ Run: `pnpm test packages/engine` → FAIL.
 
 `packages/engine/src/events/catalog.ts`:
 ```ts
-import { CHANNELS, type Channel, type EventTypeDef } from '@ripple/schema';
+import { CHANNELS, type Channel, type EventTypeDef, type ScheduledEvent } from '@ripple/schema';
 
 export type ChannelPoints = Record<Channel, number>;
 
-export class CatalogScorer {
+export interface ScoreContext {
+  t: number;
+  countries: number[]; // resolved indexes of the event's countries
+}
+
+/** Where an event's channel points come from. The catalog reads only type and magnitude; a model scorer (Jev, an LLM ensemble)
+ *  may read the countries, the text and the context. Any scorer must be a pure function of its inputs for a fixed version:
+ *  no network and no hidden state inside the tick (ADR 0002). Timing and spread stay catalog-driven via def(). */
+export interface Scorer {
+  def(typeId: string): EventTypeDef;
+  score(ev: ScheduledEvent, ctx: ScoreContext): ChannelPoints;
+}
+
+export class CatalogScorer implements Scorer {
   private readonly types: Map<string, EventTypeDef>;
   constructor(defs: EventTypeDef[]) {
     this.types = new Map(defs.map((d) => [d.id, d]));
@@ -2450,11 +2470,14 @@ export class CatalogScorer {
     if (!d) throw new Error(`unknown event type: ${typeId}`);
     return d;
   }
-  score(typeId: string, magnitude: number): ChannelPoints {
+  points(typeId: string, magnitude: number): ChannelPoints {
     const d = this.def(typeId);
     const out = { econ: 0, safety: 0, health: 0, info: 0 } as ChannelPoints;
     for (const ch of CHANNELS) out[ch] = (d.impact[ch] ?? 0) * (magnitude / 3);
     return out;
+  }
+  score(ev: ScheduledEvent, _ctx: ScoreContext): ChannelPoints {
+    return this.points(ev.type, ev.magnitude);
   }
 }
 ```
@@ -2468,7 +2491,7 @@ import { applyShock, type DynParams } from '../dynamics.js';
 import type { LinkGraph } from '../graph.js';
 import type { Journal } from '../journal.js';
 import type { WorldState } from '../state.js';
-import type { CatalogScorer, ChannelPoints } from './catalog.js';
+import type { ChannelPoints, Scorer } from './catalog.js';
 
 export type ApplyMode = 'embedded' | 'forward' | 'inverse';
 
@@ -2487,7 +2510,7 @@ export interface ActiveEvent {
 }
 
 export function makeActiveEvent(
-  ev: ScheduledEvent, countries: number[], scorer: CatalogScorer, mode: ApplyMode, startAbs: number,
+  ev: ScheduledEvent, countries: number[], scorer: Scorer, mode: ApplyMode, startAbs: number,
 ): ActiveEvent {
   const def = scorer.def(ev.type);
   return {
@@ -2495,7 +2518,7 @@ export function makeActiveEvent(
     typeId: ev.type,
     countries,
     global: ev.scope === 'global',
-    points: scorer.score(ev.type, ev.magnitude),
+    points: scorer.score(ev, { t: startAbs, countries }),
     startAbs,
     shockMonths: ev.shockMonths ?? def.shockMonths,
     persistMonths: ev.persistMonths ?? def.persistMonths,
@@ -2857,7 +2880,7 @@ git commit -m "feat(engine): catalog scorer, embedded/forward/inverse impact, mi
   - `interface WorldShared { store; trend: Trend; countries: Country[]; params; graph; scorer; channels; engine; transitions: Map<string, Transition>; countryIndex; indicatorIndex; hazards: Hazard[]; liveHistory; todayAbs; seed }`.
   - `interface LogEntry { t: number; kind: 'fired' | 'inverse' | 'delayed' | 'cancelled' | 'transition' | 'retargeted' | 'diverged'; id: string; mode?: ApplyMode; from?: string; to?: string }`.
   - `class SimWorld { state: WorldState; scheduler: Scheduler; journal: Journal; active: ActiveEvent[]; log: LogEntry[]; step(t, mirror?: Mirror) }`, `interface Mirror { x: Float32Array; fired: Map<string, ScheduledEvent>; divergence: Float32Array }`. Мир игрока получает контекст передачи модели; базовая линия — нет.
-  - `interface SimOptions { dataset: Dataset; content: Content; seed: number; startYear: number; endYear?: number; liveHistory?: number; hazards?: Hazard[] }` (endYear по умолчанию 2050, liveHistory 0, hazards пусто).
+  - `interface SimOptions { dataset: Dataset; content: Content; seed: number; startYear: number; endYear?: number; liveHistory?: number; hazards?: Hazard[]; scorer?: Scorer }` (endYear по умолчанию 2050, liveHistory 0, hazards пусто, scorer — каталог контента).
   - `class Simulation { t; startAbs; endAbs; todayAbs; baseline: SimWorld; player: SimWorld; interventions: PlayerEvent[]; static create(opts); step(): boolean; runTo(abs); run(); apply(ev: PlayerEvent): string; divergence(): { world: number; byCountry: Float32Array }; snapshot(): Snapshot; stateHash(): { baseline: number; player: number }; serializeRun(): RunRecord; static restoreRun(dataset, content, run, hazards?): Simulation }`.
   - Расхождение страны: RMS разницы индексов через `1 − exp(−rms/σ)`, если страна активна в обоих мирах; `1`, если только в одном (ADR 0005; вес — население того мира, где она есть); страны, которых нет нигде, не считаются.
   - `interface CountrySnapshot { id; active: { baseline: boolean; player: boolean }; values: Record<string, { baseline: number; player: number; real: number }> }` (log10count переводится в абсолют), `interface Snapshot { t; year; month; divergence: { world; byCountry: Record<string, number> }; countries: CountrySnapshot[]; log: { baseline: LogEntry[]; player: LogEntry[] } }`.
@@ -2961,10 +2984,10 @@ describe('hazards', () => {
 ```ts
 import { describe, expect, it } from 'vitest';
 import { absMonth } from '@ripple/schema';
-import { Simulation, type Hazard } from '@ripple/engine';
+import { CatalogScorer, Simulation, type Hazard, type Scorer } from '@ripple/engine';
 import { buildFixture } from './fixtures/world.js';
 
-const make = (seed = 1, startYear = 1980, endYear = 2004, extra: { liveHistory?: number; hazards?: Hazard[] } = {}) => {
+const make = (seed = 1, startYear = 1980, endYear = 2004, extra: { liveHistory?: number; hazards?: Hazard[]; scorer?: Scorer } = {}) => {
   const { dataset, content } = buildFixture();
   return Simulation.create({ dataset, content, seed, startYear, endYear, ...extra });
 };
@@ -3085,6 +3108,20 @@ describe('Simulation', () => {
     const after = (w: { log: Array<{ t: number; id: string }> }) => w.log.filter((l) => l.id.startsWith('gen-') && l.t > strict.todayAbs).map((l) => l.id);
     expect(after(strict.baseline).length).toBeGreaterThan(0);
     expect(after(strict.player)).toEqual(after(strict.baseline));
+  });
+
+  it('takes channel points from a pluggable scorer', () => {
+    const catalog = new CatalogScorer(buildFixture().content.eventTypes);
+    const doubled: Scorer = {
+      def: (id) => catalog.def(id),
+      score: (ev, ctx) => { const p = catalog.score(ev, ctx); return { ...p, econ: p.econ * 2 }; },
+    };
+    const econA = (s: Simulation) => {
+      s.apply({ type: 'investment', country: 'A', magnitude: 3, year: 1983, month: 1 });
+      s.run();
+      return s.snapshot().countries.find((c) => c.id === 'A')!.values.economy!.player;
+    };
+    expect(econA(make(3, 1980, 2004, { scorer: doubled }))).toBeGreaterThan(econA(make(3)));
   });
 
   it('rejects unknown types, non-player types and unknown countries', () => {
@@ -3267,7 +3304,7 @@ export function generateEvents(hazards: Hazard[], ctx: HazardContext, gate: Gene
 ```ts
 import type { ChannelMap, Country, EngineConfig, ScheduledEvent, Transition } from '@ripple/schema';
 import { stepIndicators, type DynParams } from './dynamics.js';
-import { CatalogScorer } from './events/catalog.js';
+import type { Scorer } from './events/catalog.js';
 import { applyActiveEvents, isExpired, makeActiveEvent, type ActiveEvent, type ApplyMode } from './events/impact.js';
 import { Scheduler, type HandoverContext } from './events/schedule.js';
 import type { LinkGraph } from './graph.js';
@@ -3284,7 +3321,7 @@ export interface WorldShared {
   countries: Country[];
   params: DynParams[];
   graph: LinkGraph;
-  scorer: CatalogScorer;
+  scorer: Scorer;
   channels: ChannelMap;
   engine: EngineConfig;
   transitions: Map<string, Transition>;
@@ -3375,7 +3412,7 @@ export class SimWorld {
 import { absMonth, fromAbs, type PlayerEvent, type RunRecord, type ScheduledEvent } from '@ripple/schema';
 import type { Content } from '@ripple/content';
 import { dynParamsFromMeta } from './dynamics.js';
-import { CatalogScorer } from './events/catalog.js';
+import { CatalogScorer, type Scorer } from './events/catalog.js';
 import { LinkGraph } from './graph.js';
 import type { Hazard } from './hazards.js';
 import { initState } from './state.js';
@@ -3392,6 +3429,7 @@ export interface SimOptions {
   endYear?: number;
   liveHistory?: number; // 0..1, default 0 («Строгая»); UI presets: 0 / 0.3 / 1
   hazards?: Hazard[]; // default none (stage 0)
+  scorer?: Scorer; // default: the content catalog; the seam for model scorers (version 2.0)
 }
 
 export interface CountrySnapshot {
@@ -3446,7 +3484,7 @@ export class Simulation {
       countries: dataset.countries,
       params: dynParamsFromMeta(dataset.meta),
       graph: new LinkGraph(dataset.graph, store.countryIndex),
-      scorer: new CatalogScorer(content.eventTypes),
+      scorer: opts.scorer ?? new CatalogScorer(content.eventTypes),
       channels: content.channels,
       engine: content.engine,
       transitions: new Map(content.transitions.map((tr) => [tr.id, tr])),
