@@ -4,7 +4,7 @@ export const LocalizedText = z.object({ ru: z.string(), en: z.string() });
 export type LocalizedText = z.infer<typeof LocalizedText>;
 
 export const Country = z.object({
-  id: z.string().min(3).max(4),
+  id: z.string().min(1).max(4), // synthetic fixtures use one-letter ids; real data carries ISO-style codes
   name: LocalizedText,
   region: z.string(),
   subregion: z.string(),
