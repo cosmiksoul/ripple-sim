@@ -17,7 +17,7 @@ export const SOURCES = {
   },
   wpp: {
     id: 'un-wpp-2024-total-population',
-    url: 'https://population.un.org/wpp/Download/Files/1_Indicator%20(Standard)/CSV_FILES/WPP2024_TotalPopulationBySex.csv.gz',
+    url: 'https://population.un.org/wpp/assets/Excel%20Files/1_Indicator%20(Standard)/CSV_FILES/WPP2024_TotalPopulationBySex.csv.gz',
     license: 'CC BY 3.0 IGO',
     attribution: 'United Nations, DESA, Population Division. World Population Prospects 2024',
     binary: true,
