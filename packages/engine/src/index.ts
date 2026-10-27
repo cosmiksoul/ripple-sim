@@ -3,3 +3,4 @@ export * from './types.js';
 export * from './store.js';
 export * from './state.js';
 export * from './dynamics.js';
+export * from './graph.js';
