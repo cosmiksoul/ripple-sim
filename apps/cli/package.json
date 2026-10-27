@@ -1,0 +1,11 @@
+{
+  "name": "@ripple/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@ripple/schema": "workspace:*",
+    "@ripple/engine": "workspace:*",
+    "@ripple/content": "workspace:*"
+  }
+}
