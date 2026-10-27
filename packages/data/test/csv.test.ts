@@ -14,6 +14,6 @@ describe('csv', () => {
     expect(parseCsv('a,b,\n1,2,3')).toEqual([['a', 'b', ''], ['1', '2', '3']]);
   });
   it('maps rows to objects by header and strips a BOM', () => {
-    expect(csvObjects('﻿Entity,Code,Year,v\nFrance,FRA,1990,0.5\n\n')).toEqual([{ Entity: 'France', Code: 'FRA', Year: '1990', v: '0.5' }]);
+    expect(csvObjects('\uFEFFEntity,Code,Year,v\nFrance,FRA,1990,0.5\n\n')).toEqual([{ Entity: 'France', Code: 'FRA', Year: '1990', v: '0.5' }]);
   });
 });
