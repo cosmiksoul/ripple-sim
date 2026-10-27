@@ -1,0 +1,6 @@
+{
+  "principalTypes": ["Sovereign country", "Country"],
+  "include": ["KOS", "PSX", "KAZ", "CUB", "ISR"],
+  "exclude": ["ATA", "CYN", "SOL", "KAS", "SAH"],
+  "idOverrides": { "KOS": "XKX", "SDS": "SSD", "PSX": "PSE" }
+}

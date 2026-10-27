@@ -31,3 +31,11 @@ export const Priors = z.record(
   z.object({ default: z.number(), bySubregion: z.record(z.string(), z.number()).default({}) }),
 );
 export type Priors = z.infer<typeof Priors>;
+
+export const GeoConfig = z.object({
+  principalTypes: z.array(z.string()).min(1), // Natural Earth TYPE values that mean "a state of its own"
+  include: z.array(z.string()).default([]), // ADM0_A3 codes kept regardless of TYPE
+  exclude: z.array(z.string()).default([]), // ADM0_A3 codes dropped regardless of TYPE
+  idOverrides: z.record(z.string(), z.string()).default({}), // ADM0_A3 → our id
+});
+export type GeoConfig = z.infer<typeof GeoConfig>;
