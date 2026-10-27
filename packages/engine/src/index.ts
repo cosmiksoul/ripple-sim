@@ -9,3 +9,7 @@ export * from './events/catalog.js';
 export * from './events/impact.js';
 export * from './events/schedule.js';
 export * from './transitions.js';
+export * from './trend.js';
+export * from './hazards.js';
+export * from './world.js';
+export * from './sim.js';
