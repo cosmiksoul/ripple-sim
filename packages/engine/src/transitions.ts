@@ -45,15 +45,13 @@ export function applyTransition(tr: Transition, state: WorldState, real: RealSou
   const wSum = w.reduce((a, b) => a + b, 0);
   for (let i = 0; i < state.nI; i++) {
     const kd = state.idx(i, dst);
-    if (kinds[i] === 'log10count') {
-      state.x[kd] = Math.log10(from.reduce((acc, c) => acc + Math.pow(10, state.x[state.idx(i, c)]!), 0));
-      state.offset[kd] = 0;
-    } else {
-      const own = real.real(i, dst, t);
-      const weighted = from.reduce((acc, c, k) => acc + (w[k]! / wSum) * state.x[state.idx(i, c)]!, 0);
-      state.x[kd] = Number.isNaN(own) ? weighted : own;
-      state.offset[kd] = from.reduce((acc, c, k) => acc + (w[k]! / wSum) * state.offset[state.idx(i, c)]!, 0);
-    }
+    // The survivor's own observed series is already the unified country; fall back to combining the parts.
+    const own = real.real(i, dst, t);
+    const fallback = kinds[i] === 'log10count'
+      ? Math.log10(from.reduce((acc, c) => acc + Math.pow(10, state.x[state.idx(i, c)]!), 0))
+      : from.reduce((acc, c, k) => acc + (w[k]! / wSum) * state.x[state.idx(i, c)]!, 0);
+    state.x[kd] = Number.isNaN(own) ? fallback : own;
+    state.offset[kd] = from.reduce((acc, c, k) => acc + (w[k]! / wSum) * state.offset[state.idx(i, c)]!, 0);
   }
   for (const c of from) if (c !== dst) state.active[c] = 0;
 }

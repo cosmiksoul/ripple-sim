@@ -33,17 +33,33 @@ describe('transitions', () => {
     expect(state.x[state.idx(ind('economy'), id('E'))]).toBeCloseTo(35, 3);
   });
 
-  it('merge: real value for the survivor, population-weighted offsets, log-summed counts, absorbed country deactivates', () => {
+  it('merge: real value for the survivor, population-weighted offsets for every kind, absorbed country deactivates', () => {
     const { store, state, id, ind } = setup();
     const f = id('F'), g = id('G'), econ = ind('economy'), pop = ind('population');
+    const t = absMonth(1994, 1);
     state.offset[state.idx(econ, f)] = 2;
     state.offset[state.idx(econ, g)] = 4;
     state.x[state.idx(pop, f)] = 7; // 10M
     state.x[state.idx(pop, g)] = 7; // 10M → equal weights
-    applyTransition(FIXTURE_TRANSITIONS[2]!, state, store, store.countryIndex, absMonth(1994, 1));
+    state.offset[state.idx(pop, f)] = 0.1;
+    state.offset[state.idx(pop, g)] = 0.3;
+    applyTransition(FIXTURE_TRANSITIONS[2]!, state, store, store.countryIndex, t);
     expect(state.active[g]).toBe(0);
     expect(state.x[state.idx(econ, f)]).toBeCloseTo(60, 3); // F's real series
     expect(state.offset[state.idx(econ, f)]).toBeCloseTo(3, 5);
+    expect(state.x[state.idx(pop, f)]).toBeCloseTo(store.real(pop, f, t), 5); // F's own observed count, not the sum
+    expect(state.offset[state.idx(pop, f)]).toBeCloseTo(0.2, 5);
+  });
+
+  it('merge without the survivor’s own data log-sums the counts and keeps the weighted index', () => {
+    const { store, state, id, ind } = setup();
+    const f = id('F'), g = id('G'), econ = ind('economy'), pop = ind('population');
+    state.x[state.idx(econ, f)] = 50;
+    state.x[state.idx(econ, g)] = 70;
+    state.x[state.idx(pop, f)] = 7;
+    state.x[state.idx(pop, g)] = 7;
+    applyTransition(FIXTURE_TRANSITIONS[2]!, state, store, store.countryIndex, store.meta.lastAbs + 1);
     expect(state.x[state.idx(pop, f)]).toBeCloseTo(Math.log10(2e7), 5);
+    expect(state.x[state.idx(econ, f)]).toBeCloseTo(60, 5);
   });
 });
