@@ -15,7 +15,8 @@ function cyrb53(str: string, seed: number): number {
 }
 
 export type Key = string | number;
-const SEP = '';
+// Unit separator between keys: prevents boundary collisions (('a','b') vs ('ab')).
+const SEP = '\u001f';
 
 export function hashKeys(seed: number, ...keys: Key[]): number {
   return cyrb53(keys.join(SEP), seed >>> 0);
