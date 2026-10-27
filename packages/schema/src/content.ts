@@ -22,6 +22,7 @@ export const EngineConfig = z.object({
   generation: z.object({ gamma: z.number().positive() }), // player world before «today»: hazard × max(liveHistory, divergence^gamma)
   handover: z.object({ retarget: z.array(EventGroup) }), // real events of these groups move to the territory holder; others are cancelled
   signal: z.object({ infoShare: z.number().min(0).max(1) }), // share of the info points the signal delivers; the shock delivers the rest (ADR 0006)
+  horizon: z.object({ firstYear: z.number().int(), lastYear: z.number().int() }),
   divergenceSigma: z.number().positive(),
 });
 export type EngineConfig = z.infer<typeof EngineConfig>;
@@ -39,3 +40,19 @@ export const GeoConfig = z.object({
   idOverrides: z.record(z.string(), z.string()).default({}), // ADM0_A3 → our id
 });
 export type GeoConfig = z.infer<typeof GeoConfig>;
+
+const Sourced = { source: z.string(), projection: z.boolean().optional() }; // projection: the source continues past «today» with a forecast
+export const NormalizationRule = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('identity'), ...Sourced }),
+  z.object({ kind: z.literal('linear'), lo: z.number(), hi: z.number(), ...Sourced }),
+  z.object({ kind: z.literal('log'), lo: z.number().positive(), hi: z.number().positive(), ...Sourced }),
+  z.object({ kind: z.literal('log10'), ...Sourced }),
+  z.object({ kind: z.literal('prior') }),
+  z.object({
+    kind: z.literal('derived'),
+    terms: z.array(z.object({ indicator: z.string(), weight: z.number(), invert: z.boolean().default(false) })).min(1),
+  }),
+]);
+export type NormalizationRule = z.infer<typeof NormalizationRule>;
+export const Normalization = z.record(z.string(), NormalizationRule);
+export type Normalization = z.infer<typeof Normalization>;

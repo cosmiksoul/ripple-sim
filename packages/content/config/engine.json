@@ -4,5 +4,6 @@
   "generation": { "gamma": 1.5 },
   "handover": { "retarget": ["nature"] },
   "signal": { "infoShare": 0.5 },
+  "horizon": { "firstYear": 1980, "lastYear": 2100 },
   "divergenceSigma": 40
 }

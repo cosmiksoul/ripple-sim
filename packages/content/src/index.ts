@@ -1,6 +1,6 @@
 import {
-  Analogs, ChannelMap, EngineConfig, EventTypeDef, GeoConfig, HistoricalCountry, IndicatorConfigs, Priors, ScheduledEvent, Transition,
-  type IndicatorConfig,
+  Analogs, ChannelMap, EngineConfig, EventTypeDef, GeoConfig, HistoricalCountry, IndicatorConfigs, Normalization, Priors, ScheduledEvent,
+  Transition, type IndicatorConfig,
 } from '@ripple/schema';
 import { z } from 'zod';
 import eventTypesJson from '../catalog/event-types.json';
@@ -8,6 +8,7 @@ import channelsJson from '../catalog/channels.json';
 import indicatorsJson from '../config/indicators.json';
 import engineJson from '../config/engine.json';
 import geoJson from '../config/geo.json';
+import normalizationJson from '../config/normalization.json';
 import priorsJson from '../priors/indicators.json';
 import historicalJson from '../historical-countries.json';
 import analogsJson from '../analogs.json';
@@ -20,6 +21,7 @@ export interface Content {
   indicatorConfig: Record<string, IndicatorConfig>;
   engine: EngineConfig;
   geo: GeoConfig;
+  normalization: Normalization;
   priors: Priors;
   historicalCountries: HistoricalCountry[];
   analogs: Analogs;
@@ -31,12 +33,16 @@ let cached: Content | undefined;
 
 export function loadContent(): Content {
   if (cached) return cached;
+  const indicatorConfig = IndicatorConfigs.parse(indicatorsJson);
+  const normalization = Normalization.parse(normalizationJson);
+  for (const code of Object.keys(indicatorConfig)) if (!normalization[code]) throw new Error(`normalization.json: no rule for indicator ${code}`);
   cached = {
     eventTypes: z.array(EventTypeDef).parse(eventTypesJson),
     channels: ChannelMap.parse(channelsJson),
-    indicatorConfig: IndicatorConfigs.parse(indicatorsJson),
+    indicatorConfig,
     engine: EngineConfig.parse(engineJson),
     geo: GeoConfig.parse(geoJson),
+    normalization,
     priors: Priors.parse(priorsJson),
     historicalCountries: z.array(HistoricalCountry).parse(historicalJson),
     analogs: Analogs.parse(analogsJson),

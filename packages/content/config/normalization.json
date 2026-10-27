@@ -1,0 +1,19 @@
+{
+  "economy":      { "kind": "log",      "lo": 300, "hi": 150000, "source": "wdi:NY.GDP.PCAP.PP.KD" },
+  "inequality":   { "kind": "identity", "source": "wdi:SI.POV.GINI" },
+  "health":       { "kind": "linear",   "lo": 30, "hi": 90, "source": "wdi:SP.DYN.LE00.IN" },
+  "education":    { "kind": "linear",   "lo": 0, "hi": 15, "source": "owid:mean-years-of-schooling-long-run" },
+  "inflation":    { "kind": "identity", "source": "wdi:FP.CPI.TOTL.ZG" },
+  "information":  { "kind": "identity", "source": "wdi:IT.NET.USER.ZS" },
+  "freedom":      { "kind": "linear",   "lo": 0, "hi": 1, "source": "owid:liberal-democracy-index" },
+  "institutions": { "kind": "linear",   "lo": 1, "hi": 0, "source": "owid:political-corruption-index" },
+  "stability":    { "kind": "prior" },
+  "happiness":    { "kind": "derived", "terms": [
+    { "indicator": "economy", "weight": 0.4 },
+    { "indicator": "health", "weight": 0.3 },
+    { "indicator": "freedom", "weight": 0.2 },
+    { "indicator": "inequality", "weight": 0.1, "invert": true }
+  ] },
+  "population":   { "kind": "log10",    "source": "wpp:PopTotal", "projection": true },
+  "gdp":          { "kind": "log10",    "source": "wdi:NY.GDP.MKTP.PP.KD" }
+}
