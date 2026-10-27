@@ -77,6 +77,8 @@ export class Scheduler {
   private live: Entry[] | null = null; // the work queue of the tick in progress: a hook due this very month joins it
   private readonly firedByTick = new Map<number, Map<string, Firing>>();
   private readonly divergedIds = new Set<string>();
+  // `to` countries of transitions carried by shocks fired this tick, so same-tick hooks on a newborn country are not judged missing (player world)
+  private readonly bornNow = new Set<string>();
   private now: number;
   readonly fired = new Set<string>(); // shocks only
 
@@ -104,6 +106,7 @@ export class Scheduler {
 
   tick(ctx: SchedulerContext): TickResult {
     const t = ctx.t;
+    this.bornNow.clear();
     const firedNow = new Map<string, Firing>();
     this.firedByTick.set(t, firedNow);
     const result: TickResult = { firings: [], signalled: [], delayed: [], averted: [], cancelled: [], retargeted: [], diverged: [] };
@@ -186,7 +189,7 @@ export class Scheduler {
     // Independence events list the newborn first; what must exist is the country it leaves, i.e. the transition's `from`.
     const anchorId = (e.transition ? h.transitions.get(e.transition)?.from[0] : undefined) ?? e.countries[0]!;
     const anchor = ctx.countryIndex.get(anchorId);
-    if (anchor === undefined || ctx.state.active[anchor] === 1) return null;
+    if (anchor === undefined || ctx.state.active[anchor] === 1 || this.bornNow.has(anchorId)) return null;
     if (!h.retarget.has(h.groupOf(e.type))) return 'diverged';
     const holders = [...new Set(e.countries.map((id) => this.holderOf(id, ctx, h)).filter((id): id is string => id !== null))];
     return holders.length === 0 ? 'diverged' : { ...e, countries: holders };
@@ -211,6 +214,7 @@ export class Scheduler {
 
   private fire(e: ScheduledEvent, ctx: SchedulerContext, firedNow: Map<string, Firing>, result: TickResult, signalled: boolean, forced?: ApplyMode): void {
     this.fired.add(e.id);
+    if (e.transition && ctx.handover) for (const id of ctx.handover.transitions.get(e.transition)?.to ?? []) this.bornNow.add(id);
     this.emit({ event: e, mode: forced ?? this.modeOf(e.id, 'shock', ctx), phase: 'shock', signalled }, firedNow, result);
     e.hooks.forEach((h, idx) => {
       if (!chance(h.probability, this.opts.seed, 'hook', e.id, idx)) return;

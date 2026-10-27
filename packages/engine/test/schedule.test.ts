@@ -203,4 +203,26 @@ describe('Scheduler', () => {
     expect(r.firings.map((f) => [f.event.id, f.phase])).toEqual([['quake-h', 'shock'], ['quake-h#h0', 'shock']]);
     expect([...scheduler.firedAt(t).keys()]).toEqual(['quake-h', 'quake-h#h0']);
   });
+
+  it("player world: a same-tick hook on a country born by the event's own transition fires instead of diverging", () => {
+    const base = setup(true);
+    const player = setup(false); // U1 is inactive here: the world applies the transition after the tick, the test does not
+    const split: ScheduledEvent = {
+      id: 'born-split', type: 'dissolution', origin: 'real-A', year: 1990, month: 1, countries: ['U'], scope: 'list', magnitude: 4,
+      preconditions: [], delayMaxYears: 5, transition: 'fx-u-1990',
+      hooks: [
+        { type: 'earthquake', target: ['U1'], delayMonths: 0, magnitude: 2, probability: 1 },
+        { type: 'earthquake', target: ['D'], delayMonths: 0, magnitude: 2, probability: 1 },
+      ],
+    };
+    for (const s of [base.scheduler, player.scheduler]) s.add(split);
+    player.state.active[player.store.countryIndex.get('D')!] = 0; // inactive and not born this tick: still diverges
+    expect(player.state.active[player.store.countryIndex.get('U1')!]).toBe(0);
+    base.scheduler.tick(base.ctx(T_SPLIT));
+    const r = player.scheduler.tick(player.ctx(T_SPLIT, { baselineX: base.state.x, mirror: base.scheduler.firedAt(T_SPLIT), handover: player.handover }));
+    const mine = r.firings.filter((f) => f.event.id.startsWith('born-split'));
+    expect(mine.map((f) => [f.event.id, f.mode])).toEqual([['born-split', 'embedded'], ['born-split#h0', 'embedded']]);
+    expect(r.diverged).toEqual(['born-split#h1']);
+    expect(r.firings.some((f) => f.mode === 'inverse' && f.event.id.startsWith('born-split'))).toBe(false);
+  });
 });
