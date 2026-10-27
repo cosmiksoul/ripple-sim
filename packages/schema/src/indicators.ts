@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MONTHS_PER_DECADE, decadeOf, decadeStartAbs } from './time.js';
 
 export const IndicatorKind = z.enum(['index', 'rate', 'log10count']);
 export type IndicatorKind = z.infer<typeof IndicatorKind>;
@@ -54,4 +55,50 @@ export function decodeGrid(raw: Int16Array, min: number, max: number): Float32Ar
     out[k] = q === MISSING ? NaN : min + (q / Q) * span;
   }
   return out;
+}
+
+export function decadesOf(meta: Pick<IndicatorsMeta, 'firstAbs' | 'lastAbs'>): number[] {
+  const out: number[] = [];
+  for (let d = decadeOf(meta.firstAbs); d <= decadeOf(meta.lastAbs); d += 10) out.push(d);
+  return out;
+}
+
+/** values: full grid [i][c][m], m = abs − firstAbs. Returns [i][c][120] block for the decade. */
+export function encodeDecade(meta: IndicatorsMeta, values: Float32Array, decade: number): Int16Array {
+  const nC = meta.countries.length;
+  const nI = meta.indicators.length;
+  const nM = meta.lastAbs - meta.firstAbs + 1;
+  const start = decadeStartAbs(decade);
+  const out = new Int16Array(nI * nC * MONTHS_PER_DECADE);
+  const block = new Float32Array(nC * MONTHS_PER_DECADE);
+  for (let i = 0; i < nI; i++) {
+    const ind = meta.indicators[i]!;
+    for (let c = 0; c < nC; c++) {
+      for (let m = 0; m < MONTHS_PER_DECADE; m++) {
+        const abs = start + m;
+        const inRange = abs >= meta.firstAbs && abs <= meta.lastAbs;
+        block[c * MONTHS_PER_DECADE + m] = inRange ? values[(i * nC + c) * nM + (abs - meta.firstAbs)]! : NaN;
+      }
+    }
+    out.set(encodeGrid(block, ind.min, ind.max), i * nC * MONTHS_PER_DECADE);
+  }
+  return out;
+}
+
+export function decodeDecadeInto(meta: IndicatorsMeta, raw: Int16Array, decade: number, values: Float32Array): void {
+  const nC = meta.countries.length;
+  const nI = meta.indicators.length;
+  const nM = meta.lastAbs - meta.firstAbs + 1;
+  const start = decadeStartAbs(decade);
+  for (let i = 0; i < nI; i++) {
+    const ind = meta.indicators[i]!;
+    const block = decodeGrid(raw.subarray(i * nC * MONTHS_PER_DECADE, (i + 1) * nC * MONTHS_PER_DECADE), ind.min, ind.max);
+    for (let c = 0; c < nC; c++) {
+      for (let m = 0; m < MONTHS_PER_DECADE; m++) {
+        const abs = start + m;
+        if (abs < meta.firstAbs || abs > meta.lastAbs) continue;
+        values[(i * nC + c) * nM + (abs - meta.firstAbs)] = block[c * MONTHS_PER_DECADE + m]!;
+      }
+    }
+  }
 }
