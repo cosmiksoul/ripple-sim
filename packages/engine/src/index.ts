@@ -4,3 +4,4 @@ export * from './store.js';
 export * from './state.js';
 export * from './dynamics.js';
 export * from './graph.js';
+export * from './journal.js';
