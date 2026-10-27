@@ -1,0 +1,14 @@
+{
+  "economy":      { "kind": "index", "min": 0, "max": 100, "stickiness": 0.15, "offsetHalflifeYears": 15, "noiseAmp": 0.05 },
+  "inequality":   { "kind": "index", "min": 0, "max": 100, "stickiness": 0.05, "offsetHalflifeYears": 20, "noiseAmp": 0.02 },
+  "health":       { "kind": "index", "min": 0, "max": 100, "stickiness": 0.10, "offsetHalflifeYears": 10, "noiseAmp": 0.02 },
+  "education":    { "kind": "index", "min": 0, "max": 100, "stickiness": 0.05, "offsetHalflifeYears": 20, "noiseAmp": 0.02 },
+  "inflation":    { "kind": "rate",  "min": -50, "max": 5000, "stickiness": 0.30, "offsetHalflifeYears": 3, "noiseAmp": 0.05 },
+  "information":  { "kind": "index", "min": 0, "max": 100, "stickiness": 0.10, "offsetHalflifeYears": 10, "noiseAmp": 0.02 },
+  "freedom":      { "kind": "index", "min": 0, "max": 100, "stickiness": 0.10, "offsetHalflifeYears": 20, "noiseAmp": 0.03 },
+  "institutions": { "kind": "index", "min": 0, "max": 100, "stickiness": 0.05, "offsetHalflifeYears": 20, "noiseAmp": 0.02 },
+  "stability":    { "kind": "index", "min": 0, "max": 100, "stickiness": 0.30, "offsetHalflifeYears": 5, "noiseAmp": 0.05 },
+  "happiness":    { "kind": "index", "min": 0, "max": 100, "stickiness": 0.20, "offsetHalflifeYears": 8, "noiseAmp": 0.03 },
+  "population":   { "kind": "log10count", "min": 0, "max": 13, "stickiness": 0.50, "offsetHalflifeYears": 30, "noiseAmp": 0 },
+  "gdp":          { "kind": "log10count", "min": 0, "max": 15, "stickiness": 0.15, "offsetHalflifeYears": 15, "noiseAmp": 0 }
+}

@@ -1,0 +1,13 @@
+[
+  { "id": "nam-1990", "abs": 23882, "kind": "secede", "from": ["ZAF"], "to": ["NAM"], "eventId": "namibia-independence-1990" },
+  { "id": "yem-1990", "abs": 23884, "kind": "merge", "from": ["YEM", "YMD"], "to": ["YEM"], "eventId": "yemen-unification-1990" },
+  { "id": "deu-1990", "abs": 23889, "kind": "merge", "from": ["DEU", "DDR"], "to": ["DEU"], "eventId": "germany-unification-1990" },
+  { "id": "sun-1991", "abs": 23903, "kind": "split", "from": ["SUN"], "to": ["RUS","UKR","BLR","MDA","GEO","ARM","AZE","KAZ","UZB","TKM","KGZ","TJK","EST","LVA","LTU"], "eventId": "ussr-dissolution-1991" },
+  { "id": "yug-1992", "abs": 23907, "kind": "split", "from": ["YUG"], "to": ["SVN","HRV","BIH","MKD","SCG"], "eventId": "yugoslavia-dissolution-1992" },
+  { "id": "csk-1993", "abs": 23916, "kind": "split", "from": ["CSK"], "to": ["CZE","SVK"], "eventId": "czechoslovakia-split-1993" },
+  { "id": "eri-1993", "abs": 23920, "kind": "secede", "from": ["ETH"], "to": ["ERI"], "eventId": "eritrea-independence-1993" },
+  { "id": "tls-2002", "abs": 24028, "kind": "secede", "from": ["IDN"], "to": ["TLS"], "eventId": "east-timor-independence-2002" },
+  { "id": "scg-2006", "abs": 24077, "kind": "split", "from": ["SCG"], "to": ["SRB","MNE"], "eventId": "montenegro-independence-2006" },
+  { "id": "xkx-2008", "abs": 24097, "kind": "secede", "from": ["SRB"], "to": ["XKX"], "eventId": "kosovo-independence-2008" },
+  { "id": "ssd-2011", "abs": 24138, "kind": "secede", "from": ["SDN"], "to": ["SSD"], "eventId": "south-sudan-independence-2011" }
+]

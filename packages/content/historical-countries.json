@@ -1,0 +1,8 @@
+[
+  { "id": "SUN", "name": { "ru": "СССР", "en": "Soviet Union" }, "region": "Europe", "subregion": "Eastern Europe", "members": ["RUS","UKR","BLR","MDA","GEO","ARM","AZE","KAZ","UZB","TKM","KGZ","TJK","EST","LVA","LTU"], "from": null, "to": 23902 },
+  { "id": "YUG", "name": { "ru": "Югославия", "en": "Yugoslavia" }, "region": "Europe", "subregion": "Southern Europe", "members": ["SVN","HRV","BIH","MKD","SRB","MNE","XKX"], "from": null, "to": 23906 },
+  { "id": "SCG", "name": { "ru": "Союзная Республика Югославия", "en": "FR Yugoslavia / Serbia and Montenegro" }, "region": "Europe", "subregion": "Southern Europe", "members": ["SRB","MNE","XKX"], "from": 23907, "to": 24076 },
+  { "id": "CSK", "name": { "ru": "Чехословакия", "en": "Czechoslovakia" }, "region": "Europe", "subregion": "Eastern Europe", "members": ["CZE","SVK"], "from": null, "to": 23915 },
+  { "id": "DDR", "name": { "ru": "ГДР", "en": "East Germany" }, "region": "Europe", "subregion": "Western Europe", "members": ["DEU"], "from": null, "to": 23888 },
+  { "id": "YMD", "name": { "ru": "Южный Йемен", "en": "South Yemen" }, "region": "Asia", "subregion": "Western Asia", "members": ["YEM"], "from": null, "to": 23883 }
+]

@@ -1,0 +1,6 @@
+{
+  "econ": { "economy": 1.0, "inflation": -0.8, "stability": 0.3, "happiness": 0.3 },
+  "safety": { "stability": 1.0, "happiness": 0.4, "economy": 0.3 },
+  "health": { "health": 1.0, "happiness": 0.3 },
+  "info": { "stability": 0.15, "freedom": 0.3 }
+}

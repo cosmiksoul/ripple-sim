@@ -1,0 +1,12 @@
+{
+  "stability": {
+    "default": 60,
+    "bySubregion": {
+      "Northern America": 85, "Western Europe": 85, "Northern Europe": 88, "Southern Europe": 72, "Eastern Europe": 60,
+      "Australia and New Zealand": 88, "Eastern Asia": 70, "South-Eastern Asia": 55, "Southern Asia": 45, "Central Asia": 55,
+      "Western Asia": 45, "Northern Africa": 50, "Western Africa": 40, "Eastern Africa": 38, "Middle Africa": 35,
+      "Southern Africa": 50, "Central America": 48, "Caribbean": 55, "South America": 50, "Melanesia": 55,
+      "Micronesia": 65, "Polynesia": 65
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "journal": { "maxTicks": 1200, "topPerTick": 400, "minAbs": 0.01 },
+  "spill": { "ringFactor": 0.25, "rings": { "econ": 2, "safety": 1, "health": 1, "info": 1 } },
+  "generation": { "gamma": 1.5 },
+  "handover": { "retarget": ["nature"] },
+  "signal": { "infoShare": 0.5 },
+  "divergenceSigma": 40
+}
