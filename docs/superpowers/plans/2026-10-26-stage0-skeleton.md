@@ -21,6 +21,7 @@
 - Бюджет: полный забег 1980→2025 двух миров в Node ≤ 3 с; `packages/data/out` ≤ 12 МБ.
 - Языки текстов контента: `ru` и `en` всегда вместе.
 - Очки события приходят через интерфейс `Scorer`; движок не знает, откуда они (в этапе 0 каталог, в версии 2.0 модель или ансамбль LLM с материализованными оценками). Оценщик чистый: никакой сети и состояния внутри тика.
+- Событие живёт в две фазы (ADR 0006): сигнал за `leadMonths` до удара бьёт только по каналу информации, удар прикладывает остальное. У природных типов опережение ноль, и тогда фаза одна, как раньше.
 - Коммит после каждой задачи. Пуш делает пользователь (SSH).
 
 ## Структура файлов
@@ -367,7 +368,7 @@ describe('int16 grid codec', () => {
 `packages/schema/test/events.test.ts`:
 ```ts
 import { describe, expect, it } from 'vitest';
-import { PlayerEvent, ScheduledEvent } from '@ripple/schema';
+import { EventTypeDef, PlayerEvent, ScheduledEvent } from '@ripple/schema';
 
 describe('event schemas', () => {
   it('applies defaults to scheduled events', () => {
@@ -377,6 +378,13 @@ describe('event schemas', () => {
     expect(e.delayMaxYears).toBe(5);
     expect(e.scope).toBe('list');
     expect(e.hooks).toEqual([]);
+    expect(e.leadMonths).toBeUndefined();
+  });
+  it('applies defaults to event types: no lead, one shock month', () => {
+    const t = EventTypeDef.parse({ id: 'flood', group: 'nature', headlines: { ru: ['{country}: наводнение'], en: ['{country}: flooding'] } });
+    expect(t.leadMonths).toBe(0);
+    expect(t.shockMonths).toBe(1);
+    expect(t.signalHeadlines).toBeUndefined();
   });
   it('rejects magnitude out of range', () => {
     expect(() => PlayerEvent.parse({ type: 'war', country: 'A', magnitude: 6, year: 1990, month: 1 })).toThrow();
@@ -569,12 +577,14 @@ export const EventTypeDef = z.object({
   id: z.string(),
   group: EventGroup,
   impact: z.record(Channel, z.number()).default({}), // points at magnitude 3; + good, − harm
+  leadMonths: z.number().int().min(0).default(0), // months from the signal to the shock; 0 = no signal (ADR 0006)
   shockMonths: z.number().int().min(1).default(1),
   persistMonths: z.number().int().min(0).default(0),
   persistRatio: z.number().min(0).default(0), // persist total = ratio × shock total
   spreadBias: z.record(LinkType, z.number()).default({}),
   playerAllowed: z.boolean().default(false),
   headlines: z.object({ ru: z.array(z.string()).min(1), en: z.array(z.string()).min(1) }),
+  signalHeadlines: z.object({ ru: z.array(z.string()).min(1), en: z.array(z.string()).min(1) }).optional(), // required when leadMonths > 0 (content test)
 });
 export type EventTypeDef = z.infer<typeof EventTypeDef>;
 
@@ -614,6 +624,7 @@ export const ScheduledEvent = z.object({
   magnitude: z.number().int().min(1).max(5),
   shockMonths: z.number().int().min(1).optional(),
   persistMonths: z.number().int().min(0).optional(),
+  leadMonths: z.number().int().min(0).optional(), // overrides the type's lead for this one event
   preconditions: z.array(Predicate).default([]),
   delayMaxYears: z.number().int().min(0).default(5),
   hooks: z.array(FollowUp).default([]),
@@ -658,6 +669,7 @@ export const EngineConfig = z.object({
   spill: z.object({ ringFactor: z.number().min(0).max(1), rings: z.record(Channel, z.number().int().min(0)) }),
   generation: z.object({ gamma: z.number().positive() }), // player world before «today»: hazard × max(liveHistory, divergence^gamma)
   handover: z.object({ retarget: z.array(EventGroup) }), // real events of these groups move to the territory holder; others are cancelled
+  signal: z.object({ infoShare: z.number().min(0).max(1) }), // share of the info points the signal delivers; the shock delivers the rest (ADR 0006)
   divergenceSigma: z.number().positive(),
 });
 export type EngineConfig = z.infer<typeof EngineConfig>;
@@ -894,6 +906,18 @@ describe('content', () => {
       for (const h of [...t.headlines.ru, ...t.headlines.en]) expect(h).toContain('{country}');
     }
   });
+  it('types with a lead carry signal headlines; nature never warns', () => {
+    for (const t of c.eventTypes) {
+      if (t.leadMonths > 0) {
+        expect(t.signalHeadlines, t.id).toBeDefined();
+        for (const h of [...t.signalHeadlines!.ru, ...t.signalHeadlines!.en]) expect(h).toContain('{country}');
+      }
+      if (t.group === 'nature') expect(t.leadMonths, t.id).toBe(0);
+    }
+    expect(c.eventTypes.find((t) => t.id === 'dissolution')!.leadMonths).toBe(6);
+    expect(c.engine.signal.infoShare).toBeGreaterThan(0);
+    expect(c.engine.signal.infoShare).toBeLessThan(1);
+  });
   it('channel map targets configured indicators', () => {
     for (const [, m] of Object.entries(c.channels)) {
       for (const code of Object.keys(m)) expect(c.indicatorConfig[code], code).toBeDefined();
@@ -919,31 +943,31 @@ Run: `pnpm test packages/content` → FAIL.
 `packages/content/catalog/event-types.json` (очки на силе 3; знак + польза, − вред):
 ```json
 [
-  { "id": "war", "group": "conflict", "impact": { "econ": -6, "safety": -15, "health": -4 }, "shockMonths": 3, "persistMonths": 24, "persistRatio": 1.0, "spreadBias": { "border": 1 }, "playerAllowed": true, "headlines": { "ru": ["{country}: началась война"], "en": ["{country}: war breaks out"] } },
-  { "id": "civil_war", "group": "conflict", "impact": { "econ": -8, "safety": -18, "health": -5 }, "shockMonths": 3, "persistMonths": 36, "persistRatio": 1.2, "spreadBias": { "border": 0.8 }, "headlines": { "ru": ["{country}: гражданская война"], "en": ["{country}: civil war"] } },
-  { "id": "ceasefire", "group": "conflict", "impact": { "safety": 8, "econ": 2 }, "shockMonths": 1, "persistMonths": 12, "persistRatio": 0.5, "headlines": { "ru": ["{country}: перемирие"], "en": ["{country}: ceasefire"] } },
+  { "id": "war", "group": "conflict", "impact": { "econ": -6, "safety": -15, "health": -4 }, "shockMonths": 3, "persistMonths": 24, "persistRatio": 1.0, "spreadBias": { "border": 1 }, "playerAllowed": true, "leadMonths": 2, "signalHeadlines": { "ru": ["{country}: на границе растёт напряжение"], "en": ["{country}: tension rises on the border"] }, "headlines": { "ru": ["{country}: началась война"], "en": ["{country}: war breaks out"] } },
+  { "id": "civil_war", "group": "conflict", "impact": { "econ": -8, "safety": -18, "health": -5 }, "shockMonths": 3, "persistMonths": 36, "persistRatio": 1.2, "spreadBias": { "border": 0.8 }, "leadMonths": 3, "signalHeadlines": { "ru": ["{country}: страна на грани гражданской войны"], "en": ["{country}: on the brink of civil war"] }, "headlines": { "ru": ["{country}: гражданская война"], "en": ["{country}: civil war"] } },
+  { "id": "ceasefire", "group": "conflict", "impact": { "safety": 8, "econ": 2 }, "shockMonths": 1, "persistMonths": 12, "persistRatio": 0.5, "leadMonths": 1, "signalHeadlines": { "ru": ["{country}: стороны ведут переговоры о перемирии"], "en": ["{country}: ceasefire talks under way"] }, "headlines": { "ru": ["{country}: перемирие"], "en": ["{country}: ceasefire"] } },
   { "id": "terror", "group": "conflict", "impact": { "safety": -6, "info": -2 }, "shockMonths": 1, "persistMonths": 6, "persistRatio": 0.5, "headlines": { "ru": ["{country}: теракт"], "en": ["{country}: terror attack"] } },
   { "id": "coup", "group": "politics", "impact": { "safety": -10, "econ": -3, "info": -3 }, "shockMonths": 2, "persistMonths": 12, "persistRatio": 0.5, "playerAllowed": true, "headlines": { "ru": ["{country}: военный переворот"], "en": ["{country}: military coup"] } },
-  { "id": "crackdown", "group": "politics", "impact": { "safety": -6, "info": -8 }, "shockMonths": 2, "persistMonths": 24, "persistRatio": 0.8, "playerAllowed": true, "headlines": { "ru": ["{country}: власти закручивают гайки"], "en": ["{country}: government cracks down"] } },
-  { "id": "liberalization", "group": "politics", "impact": { "info": 8, "safety": -3, "econ": 2 }, "shockMonths": 3, "persistMonths": 24, "persistRatio": 1.0, "playerAllowed": true, "headlines": { "ru": ["{country}: политическая оттепель"], "en": ["{country}: political opening"] } },
-  { "id": "protests", "group": "politics", "impact": { "safety": -6, "econ": -1 }, "shockMonths": 2, "persistMonths": 6, "persistRatio": 0.5, "playerAllowed": true, "headlines": { "ru": ["{country}: массовые протесты"], "en": ["{country}: mass protests"] } },
-  { "id": "revolution", "group": "politics", "impact": { "safety": -12, "econ": -5, "info": 4 }, "shockMonths": 2, "persistMonths": 12, "persistRatio": 0.5, "headlines": { "ru": ["{country}: революция"], "en": ["{country}: revolution"] } },
-  { "id": "election_change", "group": "politics", "impact": { "info": 3, "safety": 2, "econ": 1 }, "shockMonths": 1, "persistMonths": 12, "persistRatio": 1.0, "headlines": { "ru": ["{country}: выборы меняют курс"], "en": ["{country}: election changes course"] } },
-  { "id": "dissolution", "group": "politics", "impact": { "econ": -10, "safety": -12, "info": 3 }, "shockMonths": 3, "persistMonths": 36, "persistRatio": 1.0, "headlines": { "ru": ["{country}: государство распадается"], "en": ["{country}: the state dissolves"] } },
-  { "id": "unification", "group": "politics", "impact": { "econ": -2, "safety": 4, "info": 3 }, "shockMonths": 2, "persistMonths": 24, "persistRatio": 0.5, "headlines": { "ru": ["{country}: объединение"], "en": ["{country}: unification"] } },
-  { "id": "independence", "group": "politics", "impact": { "safety": 3, "econ": -2, "info": 4 }, "shockMonths": 1, "persistMonths": 12, "persistRatio": 0.5, "headlines": { "ru": ["{country}: провозглашена независимость"], "en": ["{country}: independence declared"] } },
-  { "id": "reform", "group": "politics", "impact": { "safety": 6, "econ": 2, "info": 2 }, "shockMonths": 6, "persistMonths": 36, "persistRatio": 1.0, "playerAllowed": true, "headlines": { "ru": ["{country}: правительство запускает реформы"], "en": ["{country}: government launches reforms"] } },
-  { "id": "boom", "group": "economy", "impact": { "econ": 6 }, "shockMonths": 6, "persistMonths": 24, "persistRatio": 1.0, "headlines": { "ru": ["{country}: экономический бум"], "en": ["{country}: economic boom"] } },
-  { "id": "recession", "group": "economy", "impact": { "econ": -5 }, "shockMonths": 3, "persistMonths": 12, "persistRatio": 0.5, "spreadBias": { "trade": 1, "border": 0.5 }, "headlines": { "ru": ["{country}: рецессия"], "en": ["{country}: recession"] } },
-  { "id": "financial_crash", "group": "economy", "impact": { "econ": -6 }, "shockMonths": 1, "persistMonths": 6, "persistRatio": 0.5, "spreadBias": { "trade": 1, "border": 0.3 }, "headlines": { "ru": ["{country}: обвал биржи"], "en": ["{country}: stock market crash"] } },
-  { "id": "banking_crisis", "group": "economy", "impact": { "econ": -10, "safety": -2 }, "shockMonths": 3, "persistMonths": 24, "persistRatio": 1.0, "spreadBias": { "trade": 1, "border": 0.5 }, "playerAllowed": true, "headlines": { "ru": ["{country}: банковский кризис"], "en": ["{country}: banking crisis"] } },
-  { "id": "default", "group": "economy", "impact": { "econ": -12, "safety": -3 }, "shockMonths": 2, "persistMonths": 24, "persistRatio": 1.0, "spreadBias": { "trade": 0.8, "border": 0.4 }, "headlines": { "ru": ["{country}: дефолт"], "en": ["{country}: sovereign default"] } },
-  { "id": "hyperinflation", "group": "economy", "impact": { "econ": -8, "safety": -4 }, "shockMonths": 6, "persistMonths": 24, "persistRatio": 1.0, "headlines": { "ru": ["{country}: гиперинфляция"], "en": ["{country}: hyperinflation"] } },
-  { "id": "sanctions", "group": "economy", "impact": { "econ": -5, "info": -2 }, "shockMonths": 1, "persistMonths": 60, "persistRatio": 2.0, "playerAllowed": true, "headlines": { "ru": ["{country}: введены санкции"], "en": ["{country}: sanctions imposed"] } },
-  { "id": "oil_price_crash", "group": "economy", "impact": { "econ": -8 }, "shockMonths": 3, "persistMonths": 24, "persistRatio": 1.0, "headlines": { "ru": ["{country}: обвал цен на нефть бьёт по бюджету"], "en": ["{country}: oil price crash hits the budget"] } },
-  { "id": "oil_price_spike", "group": "economy", "impact": { "econ": -4 }, "shockMonths": 3, "persistMonths": 6, "persistRatio": 0.5, "headlines": { "ru": ["{country}: нефть дорожает, экономика тормозит"], "en": ["{country}: oil spike slows the economy"] } },
+  { "id": "crackdown", "group": "politics", "impact": { "safety": -6, "info": -8 }, "shockMonths": 2, "persistMonths": 24, "persistRatio": 0.8, "playerAllowed": true, "leadMonths": 1, "signalHeadlines": { "ru": ["{country}: власти грозят жёсткими мерами"], "en": ["{country}: government threatens a crackdown"] }, "headlines": { "ru": ["{country}: власти закручивают гайки"], "en": ["{country}: government cracks down"] } },
+  { "id": "liberalization", "group": "politics", "impact": { "info": 8, "safety": -3, "econ": 2 }, "shockMonths": 3, "persistMonths": 24, "persistRatio": 1.0, "playerAllowed": true, "leadMonths": 2, "signalHeadlines": { "ru": ["{country}: наверху заговорили о реформах"], "en": ["{country}: talk of reform from the top"] }, "headlines": { "ru": ["{country}: политическая оттепель"], "en": ["{country}: political opening"] } },
+  { "id": "protests", "group": "politics", "impact": { "safety": -6, "econ": -1 }, "shockMonths": 2, "persistMonths": 6, "persistRatio": 0.5, "playerAllowed": true, "leadMonths": 1, "signalHeadlines": { "ru": ["{country}: в городах нарастает недовольство"], "en": ["{country}: discontent grows in the cities"] }, "headlines": { "ru": ["{country}: массовые протесты"], "en": ["{country}: mass protests"] } },
+  { "id": "revolution", "group": "politics", "impact": { "safety": -12, "econ": -5, "info": 4 }, "shockMonths": 2, "persistMonths": 12, "persistRatio": 0.5, "leadMonths": 2, "signalHeadlines": { "ru": ["{country}: режим теряет контроль"], "en": ["{country}: the regime is losing its grip"] }, "headlines": { "ru": ["{country}: революция"], "en": ["{country}: revolution"] } },
+  { "id": "election_change", "group": "politics", "impact": { "info": 3, "safety": 2, "econ": 1 }, "shockMonths": 1, "persistMonths": 12, "persistRatio": 1.0, "leadMonths": 3, "signalHeadlines": { "ru": ["{country}: оппозиция лидирует в опросах"], "en": ["{country}: opposition leads the polls"] }, "headlines": { "ru": ["{country}: выборы меняют курс"], "en": ["{country}: election changes course"] } },
+  { "id": "dissolution", "group": "politics", "impact": { "econ": -10, "safety": -12, "info": 3 }, "shockMonths": 3, "persistMonths": 36, "persistRatio": 1.0, "leadMonths": 6, "signalHeadlines": { "ru": ["{country}: аналитики предсказывают распад"], "en": ["{country}: analysts predict a breakup"] }, "headlines": { "ru": ["{country}: государство распадается"], "en": ["{country}: the state dissolves"] } },
+  { "id": "unification", "group": "politics", "impact": { "econ": -2, "safety": 4, "info": 3 }, "shockMonths": 2, "persistMonths": 24, "persistRatio": 0.5, "leadMonths": 6, "signalHeadlines": { "ru": ["{country}: идут переговоры об объединении"], "en": ["{country}: unification talks under way"] }, "headlines": { "ru": ["{country}: объединение"], "en": ["{country}: unification"] } },
+  { "id": "independence", "group": "politics", "impact": { "safety": 3, "econ": -2, "info": 4 }, "shockMonths": 1, "persistMonths": 12, "persistRatio": 0.5, "leadMonths": 3, "signalHeadlines": { "ru": ["{country}: регион требует независимости"], "en": ["{country}: region demands independence"] }, "headlines": { "ru": ["{country}: провозглашена независимость"], "en": ["{country}: independence declared"] } },
+  { "id": "reform", "group": "politics", "impact": { "safety": 6, "econ": 2, "info": 2 }, "shockMonths": 6, "persistMonths": 36, "persistRatio": 1.0, "playerAllowed": true, "leadMonths": 3, "signalHeadlines": { "ru": ["{country}: правительство готовит реформы"], "en": ["{country}: government drafts reforms"] }, "headlines": { "ru": ["{country}: правительство запускает реформы"], "en": ["{country}: government launches reforms"] } },
+  { "id": "boom", "group": "economy", "impact": { "econ": 6 }, "shockMonths": 6, "persistMonths": 24, "persistRatio": 1.0, "leadMonths": 3, "signalHeadlines": { "ru": ["{country}: прогнозы роста пересмотрены вверх"], "en": ["{country}: growth forecasts revised upward"] }, "headlines": { "ru": ["{country}: экономический бум"], "en": ["{country}: economic boom"] } },
+  { "id": "recession", "group": "economy", "impact": { "econ": -5 }, "shockMonths": 3, "persistMonths": 12, "persistRatio": 0.5, "spreadBias": { "trade": 1, "border": 0.5 }, "leadMonths": 3, "signalHeadlines": { "ru": ["{country}: экономисты предупреждают о спаде"], "en": ["{country}: economists warn of a downturn"] }, "headlines": { "ru": ["{country}: рецессия"], "en": ["{country}: recession"] } },
+  { "id": "financial_crash", "group": "economy", "impact": { "econ": -6 }, "shockMonths": 1, "persistMonths": 6, "persistRatio": 0.5, "spreadBias": { "trade": 1, "border": 0.3 }, "leadMonths": 1, "signalHeadlines": { "ru": ["{country}: биржу лихорадит"], "en": ["{country}: markets turn jittery"] }, "headlines": { "ru": ["{country}: обвал биржи"], "en": ["{country}: stock market crash"] } },
+  { "id": "banking_crisis", "group": "economy", "impact": { "econ": -10, "safety": -2 }, "shockMonths": 3, "persistMonths": 24, "persistRatio": 1.0, "spreadBias": { "trade": 1, "border": 0.5 }, "playerAllowed": true, "leadMonths": 3, "signalHeadlines": { "ru": ["{country}: вкладчики теряют доверие к банкам"], "en": ["{country}: depositors lose faith in the banks"] }, "headlines": { "ru": ["{country}: банковский кризис"], "en": ["{country}: banking crisis"] } },
+  { "id": "default", "group": "economy", "impact": { "econ": -12, "safety": -3 }, "shockMonths": 2, "persistMonths": 24, "persistRatio": 1.0, "spreadBias": { "trade": 0.8, "border": 0.4 }, "leadMonths": 3, "signalHeadlines": { "ru": ["{country}: агентства понижают рейтинг долга"], "en": ["{country}: agencies downgrade the debt"] }, "headlines": { "ru": ["{country}: дефолт"], "en": ["{country}: sovereign default"] } },
+  { "id": "hyperinflation", "group": "economy", "impact": { "econ": -8, "safety": -4 }, "shockMonths": 6, "persistMonths": 24, "persistRatio": 1.0, "leadMonths": 3, "signalHeadlines": { "ru": ["{country}: цены растут всё быстрее"], "en": ["{country}: prices climb ever faster"] }, "headlines": { "ru": ["{country}: гиперинфляция"], "en": ["{country}: hyperinflation"] } },
+  { "id": "sanctions", "group": "economy", "impact": { "econ": -5, "info": -2 }, "shockMonths": 1, "persistMonths": 60, "persistRatio": 2.0, "playerAllowed": true, "leadMonths": 2, "signalHeadlines": { "ru": ["{country}: обсуждаются санкции"], "en": ["{country}: sanctions under discussion"] }, "headlines": { "ru": ["{country}: введены санкции"], "en": ["{country}: sanctions imposed"] } },
+  { "id": "oil_price_crash", "group": "economy", "impact": { "econ": -8 }, "shockMonths": 3, "persistMonths": 24, "persistRatio": 1.0, "leadMonths": 1, "signalHeadlines": { "ru": ["{country}: нефть дешевеет, бюджет под угрозой"], "en": ["{country}: oil slides, budget at risk"] }, "headlines": { "ru": ["{country}: обвал цен на нефть бьёт по бюджету"], "en": ["{country}: oil price crash hits the budget"] } },
+  { "id": "oil_price_spike", "group": "economy", "impact": { "econ": -4 }, "shockMonths": 3, "persistMonths": 6, "persistRatio": 0.5, "leadMonths": 1, "signalHeadlines": { "ru": ["{country}: нефть дорожает на опасениях дефицита"], "en": ["{country}: oil climbs on supply fears"] }, "headlines": { "ru": ["{country}: нефть дорожает, экономика тормозит"], "en": ["{country}: oil spike slows the economy"] } },
   { "id": "discovery_resources", "group": "economy", "impact": { "econ": 8 }, "shockMonths": 12, "persistMonths": 60, "persistRatio": 1.5, "playerAllowed": true, "headlines": { "ru": ["{country}: открыто крупное месторождение"], "en": ["{country}: major resource discovery"] } },
-  { "id": "investment", "group": "economy", "impact": { "econ": 6 }, "shockMonths": 6, "persistMonths": 36, "persistRatio": 1.0, "playerAllowed": true, "headlines": { "ru": ["{country}: масштабные инвестиции в промышленность"], "en": ["{country}: large-scale industrial investment"] } },
+  { "id": "investment", "group": "economy", "impact": { "econ": 6 }, "shockMonths": 6, "persistMonths": 36, "persistRatio": 1.0, "playerAllowed": true, "leadMonths": 2, "signalHeadlines": { "ru": ["{country}: инвесторы присматриваются к промышленности"], "en": ["{country}: investors eye the industry"] }, "headlines": { "ru": ["{country}: масштабные инвестиции в промышленность"], "en": ["{country}: large-scale industrial investment"] } },
   { "id": "earthquake", "group": "nature", "impact": { "health": -6, "econ": -3, "safety": -2 }, "shockMonths": 1, "persistMonths": 12, "persistRatio": 0.5, "playerAllowed": true, "headlines": { "ru": ["{country}: разрушительное землетрясение"], "en": ["{country}: devastating earthquake"] } },
   { "id": "flood", "group": "nature", "impact": { "health": -3, "econ": -3 }, "shockMonths": 1, "persistMonths": 6, "persistRatio": 0.5, "headlines": { "ru": ["{country}: наводнение"], "en": ["{country}: flooding"] } },
   { "id": "drought_famine", "group": "nature", "impact": { "health": -10, "econ": -6, "safety": -4 }, "shockMonths": 6, "persistMonths": 12, "persistRatio": 0.5, "headlines": { "ru": ["{country}: засуха и голод"], "en": ["{country}: drought and famine"] } },
@@ -951,7 +975,7 @@ Run: `pnpm test packages/content` → FAIL.
   { "id": "industrial_accident", "group": "nature", "impact": { "health": -4, "econ": -1, "info": -2 }, "shockMonths": 1, "persistMonths": 12, "persistRatio": 0.5, "headlines": { "ru": ["{country}: техногенная катастрофа"], "en": ["{country}: industrial disaster"] } },
   { "id": "nuclear_accident", "group": "nature", "impact": { "health": -6, "info": -6, "econ": -2 }, "shockMonths": 2, "persistMonths": 24, "persistRatio": 1.0, "spreadBias": { "border": 1 }, "headlines": { "ru": ["{country}: авария на АЭС"], "en": ["{country}: nuclear accident"] } },
   { "id": "tech_breakthrough", "group": "society", "impact": { "econ": 5, "health": 2 }, "shockMonths": 12, "persistMonths": 60, "persistRatio": 1.5, "playerAllowed": true, "headlines": { "ru": ["{country}: технологический прорыв"], "en": ["{country}: technological breakthrough"] } },
-  { "id": "migration_wave", "group": "society", "impact": { "econ": -1, "safety": -3, "info": -2 }, "shockMonths": 3, "persistMonths": 12, "persistRatio": 0.5, "headlines": { "ru": ["{country}: волна беженцев"], "en": ["{country}: refugee wave"] } },
+  { "id": "migration_wave", "group": "society", "impact": { "econ": -1, "safety": -3, "info": -2 }, "shockMonths": 3, "persistMonths": 12, "persistRatio": 0.5, "leadMonths": 2, "signalHeadlines": { "ru": ["{country}: ожидается приток беженцев"], "en": ["{country}: refugee influx expected"] }, "headlines": { "ru": ["{country}: волна беженцев"], "en": ["{country}: refugee wave"] } },
   { "id": "info_campaign", "group": "society", "impact": { "info": 4 }, "shockMonths": 3, "persistMonths": 6, "persistRatio": 0.5, "playerAllowed": true, "headlines": { "ru": ["{country}: информационная кампания"], "en": ["{country}: information campaign"] } }
 ]
 ```
@@ -993,6 +1017,7 @@ Run: `pnpm test packages/content` → FAIL.
   "spill": { "ringFactor": 0.25, "rings": { "econ": 2, "safety": 1, "health": 1, "info": 1 } },
   "generation": { "gamma": 1.5 },
   "handover": { "retarget": ["nature"] },
+  "signal": { "infoShare": 0.5 },
   "divergenceSigma": 40
 }
 ```
@@ -1168,7 +1193,7 @@ export function loadContent(): Content {
 
 - [ ] **Step 6: Прогнать и закоммитить**
 
-Run: `pnpm test packages/content && pnpm typecheck` → PASS (6 тестов).
+Run: `pnpm test packages/content && pnpm typecheck` → PASS (7 тестов).
 
 ```bash
 git add packages/content
@@ -2102,6 +2127,8 @@ git commit -m "feat(engine): causal journal with per-tick top-N and why() traver
 
 Передача модели (ADR 0005): если в мире игрока первичная страна реального события неактивна (СССР не распался, а событие стоит на России), планировщик смотрит на группу типа события. Группы из `engine.handover.retarget` (в v0 — `nature`) перенаправляются владельцу территории — ближайшему активному предшественнику, а если его нет, преемнику — и применяются `forward` с записью `retargeted {from, to}` (в интерфейсе — «в реальности: …»); остальные группы не срабатывают и не вычитаются (у неактивной страны нет состояния), запись `diverged` («история пошла иначе»). Передача проверяется на каждом тике заново, поэтому отложенное событие при «рождении» страны пойдёт своим путём.
 
+Сигнал и удар (ADR 0006): у типа события есть опережение `leadMonths` (у природных типов ноль; событие может переопределить его своим `leadMonths`). Датированные события (`real-*`, `hook`) несут месяц удара, сигнал выходит на `leadMonths` раньше; свежие (`player`, `generated`) входят в мир сигналом в месяц своей даты, удар приходит через `leadMonths`. Сигнал прикладывает только канал информации в доле `engine.signal.infoShare`, удар после сигнала — остальное; удар без сигнала (опережение ноль, или месяц сигнала уже позади в момент `add`, или сигнал раньше старта забега) — всё целиком. Сигнал безусловен и зеркалится между мирами так же, как удар: ключ зеркала `phaseKey(id, phase)` = `${id}#signal` для сигнала и `id` для удара, так что у сигнала свой режим `embedded`/`forward`/`inverse`. Предусловия проверяются только на ударе; если после сигнала они не прошли, тик записывает `averted` («предотвращено») один раз и дальше ведёт событие как отложенное: в окне `delayMaxYears` оно ещё может сработать `forward` или быть отменено. Передача модели решается на каждом касании (сигнал и удар); событие, разошедшееся на сигнале, не ударяет и не вычитается никогда (планировщик помнит разошедшиеся id).
+
 **Files:**
 - Create: `packages/engine/src/events/catalog.ts`, `packages/engine/src/events/impact.ts`, `packages/engine/src/events/schedule.ts`, `packages/engine/src/transitions.ts`; Modify: `packages/engine/src/index.ts`
 - Test: `packages/engine/test/catalog.test.ts`, `packages/engine/test/impact.test.ts`, `packages/engine/test/schedule.test.ts`, `packages/engine/test/transitions.test.ts`
@@ -2112,12 +2139,12 @@ git commit -m "feat(engine): causal journal with per-tick top-N and why() traver
   - `interface ScoreContext { t: number; countries: number[] }`, `interface Scorer { def(typeId): EventTypeDef; score(ev: ScheduledEvent, ctx: ScoreContext): ChannelPoints }` — шов для будущих оценщиков (Jev, ансамбль LLM): они читают страны, текст и контекст, каталог их игнорирует. Оценщик обязан быть чистой функцией своих входов при фиксированной версии (ADR 0002).
   - `class CatalogScorer implements Scorer { constructor(defs: EventTypeDef[]); def(typeId): EventTypeDef; points(typeId, magnitude): ChannelPoints; score(ev, ctx): ChannelPoints }` — очки = `impact × magnitude / 3`; `score` делегирует в `points`.
   - `type ApplyMode = 'embedded' | 'forward' | 'inverse'`.
-  - `interface ActiveEvent { id; typeId; countries: number[]; global: boolean; points: Record<Channel, number>; startAbs; shockMonths; persistMonths; persistRatio; mode: ApplyMode; spreadBias }`.
-  - `makeActiveEvent(ev: ScheduledEvent, countries: number[], scorer: Scorer, mode, startAbs): ActiveEvent`, `monthlyFactor(ev, t)`, `isExpired(ev, t)`.
+  - `type Phase = 'signal' | 'shock'`, `interface ActivePhase { phase: Phase; infoFactor: number }`, `interface ActiveEvent { id; typeId; countries: number[]; global: boolean; points: Record<Channel, number>; startAbs; shockMonths; persistMonths; persistRatio; mode: ApplyMode; phase: Phase; spreadBias }` (id сигнала `${event.id}#signal`).
+  - `makeActiveEvent(ev: ScheduledEvent, countries: number[], scorer: Scorer, mode, startAbs, at: ActivePhase = { phase: 'shock', infoFactor: 1 }): ActiveEvent` — сигнал: только `info × infoFactor`, один месяц, без хвоста; удар: все очки, `info × infoFactor`. `monthlyFactor(ev, t)`, `isExpired(ev, t)`.
   - `interface ImpactContext { state; params; meta; countries: Country[]; indicatorIndex; channels: ChannelMap; graph; spill: EngineConfig['spill']; journal; todayAbs }`, `insideData(ctx, i, c, t)` (ряд страны `c` ещё несёт реальный эффект: `t ≤ min(realUntil(i), todayAbs)` и страна не пережила свой реальный конец), `appliesTo(mode, inside)`, `applyActiveEvents(active, t, ctx)`.
-  - `interface HandoverContext { countries: Country[]; transitions: Map<string, Transition>; groupOf(type): EventGroup; retarget: ReadonlySet<EventGroup> }` (только мир игрока; событие с переходом «якорится» на первой стране `from` перехода, иначе на первой стране списка), `interface SchedulerContext { t; state; baselineX?: Float32Array; countryIndex; indicatorIndex; graph; mirror?: Map<string, ScheduledEvent>; handover?: HandoverContext }`.
-  - `interface Firing { event: ScheduledEvent; mode: ApplyMode }`, `interface TickResult { firings: Firing[]; delayed: string[]; cancelled: string[]; retargeted: Array<{ id; from: string; to: string }>; diverged: string[] }`.
-  - `class Scheduler { constructor(events, opts: { isBaseline: boolean; seed: number }); add(event); firedAt(t): Map<string, ScheduledEvent>; readonly fired: Set<string>; tick(ctx): TickResult }`. Id хука = `${parentId}#h${index}`, одинаков в обоих мирах.
+  - `interface HandoverContext { countries: Country[]; transitions: Map<string, Transition>; groupOf(type): EventGroup; retarget: ReadonlySet<EventGroup> }` (только мир игрока; событие с переходом «якорится» на первой стране `from` перехода, иначе на первой стране списка), `interface SchedulerContext { t; state; baselineX?: Float32Array; countryIndex; indicatorIndex; graph; mirror?: Map<string, Firing>; handover?: HandoverContext }`.
+  - `phaseKey(id, phase)` (`${id}#signal` | `id`), `interface Firing { event: ScheduledEvent; mode: ApplyMode; phase: Phase; signalled: boolean }` (`signalled` — у удара был сигнал), `interface TickResult { firings: Firing[]; signalled: string[]; delayed: string[]; averted: string[]; cancelled: string[]; retargeted: Array<{ id; from: string; to: string }>; diverged: string[] }`.
+  - `interface SchedulerOptions { isBaseline: boolean; seed: number; startAbs?: number; leadOf?: (type: string) => number }`, `class Scheduler { constructor(events, opts: SchedulerOptions); add(event); firedAt(t): Map<string, Firing>; readonly fired: Set<string>; tick(ctx): TickResult }`. `fired` содержит только удары. Id хука = `${parentId}#h${index}`, одинаков в обоих мирах.
   - `applyTransition(tr: Transition, state, real: RealSource, countryIndex, t): void` — активирует преемников: индексы берут собственное реальное значение преемника на месяц `t`, если оно есть, иначе наследуют значение предшественника; `offset` наследуется (при слиянии — взвешенно по населению); счётчики берут реальный ряд или долю предшественника; предшественник деактивируется (кроме `secede`).
 
 - [ ] **Step 1: Тесты**
@@ -2181,6 +2208,22 @@ describe('impact', () => {
     expect(monthlyFactor(ev, 103)).toBeCloseTo(1 / 24, 6);
     expect(monthlyFactor(ev, 126)).toBeCloseTo(1 / 24, 6);
     expect(monthlyFactor(ev, 127)).toBe(0);
+  });
+
+  it('a signal carries only its share of the info points for one month; the shock after it carries the rest', () => {
+    const { scorer } = setup();
+    const leak = { ...war, type: 'nuclear_accident' }; // magnitude 3: health −6, info −6, econ −2
+    const signal = makeActiveEvent(leak, [1], scorer, 'forward', 100, { phase: 'signal', infoFactor: 0.5 });
+    expect(signal.id).toBe('fx-war-1985#signal');
+    expect(signal.phase).toBe('signal');
+    expect(signal.points).toEqual({ econ: 0, safety: 0, health: 0, info: -3 });
+    expect(signal.shockMonths).toBe(1);
+    expect(signal.persistMonths).toBe(0);
+    const shock = makeActiveEvent(leak, [1], scorer, 'forward', 102, { phase: 'shock', infoFactor: 0.5 });
+    expect(shock.id).toBe('fx-war-1985');
+    expect(shock.points.info).toBeCloseTo(-3, 6);
+    expect(shock.points.health).toBeCloseTo(-6, 6);
+    expect(makeActiveEvent(leak, [1], scorer, 'forward', 102).points.info).toBeCloseTo(-6, 6); // bare shock: everything
   });
 
   it('applies forward shocks to the country and spills to neighbours', () => {
@@ -2372,6 +2415,78 @@ describe('Scheduler', () => {
     expect(r.diverged).toEqual([]);
   });
 
+  it('signals a dated event leadMonths before its date and strikes on the date with the rest of the info', () => {
+    const { scheduler, ctx } = setup(true);
+    scheduler.add({ id: 'crash-a', type: 'banking_crisis', origin: 'real-A', year: 1983, month: 4, countries: ['A'], scope: 'list', magnitude: 3, preconditions: [], delayMaxYears: 5, hooks: [] }); // banking_crisis: leadMonths 3
+    const t0 = absMonth(1983, 1);
+    const r = scheduler.tick(ctx(t0));
+    expect(r.signalled).toEqual(['crash-a']);
+    expect(r.firings.map((f) => [f.event.id, f.phase, f.mode])).toEqual([['crash-a', 'signal', 'embedded']]);
+    expect(scheduler.fired.has('crash-a')).toBe(false);
+    expect(scheduler.firedAt(t0).has('crash-a#signal')).toBe(true);
+    expect(scheduler.tick(ctx(t0 + 1)).firings).toEqual([]);
+    const r3 = scheduler.tick(ctx(t0 + 3));
+    expect(r3.firings.map((f) => [f.event.id, f.phase, f.signalled])).toEqual([['crash-a', 'shock', true]]);
+    expect(scheduler.fired.has('crash-a')).toBe(true);
+  });
+
+  it('player world: a fresh event is signalled the month it enters and strikes leadMonths later; lead 0 strikes at once', () => {
+    const { scheduler, ctx, state } = setup(false);
+    const t = absMonth(1983, 1);
+    scheduler.add({ id: 'player-1', type: 'investment', origin: 'player', year: 1983, month: 1, countries: ['A'], scope: 'list', magnitude: 3, preconditions: [], delayMaxYears: 0, hooks: [] }); // leadMonths 2
+    scheduler.add({ id: 'player-2', type: 'earthquake', origin: 'player', year: 1983, month: 1, countries: ['A'], scope: 'list', magnitude: 3, preconditions: [], delayMaxYears: 0, hooks: [] }); // leadMonths 0
+    const r = scheduler.tick(ctx(t, { baselineX: state.x, mirror: new Map() }));
+    expect(r.firings.map((f) => [f.event.id, f.phase, f.mode, f.signalled]).sort()).toEqual([['player-1', 'signal', 'forward', false], ['player-2', 'shock', 'forward', false]]);
+    expect(r.signalled).toEqual(['player-1']);
+    expect(scheduler.tick(ctx(t + 1, { baselineX: state.x, mirror: new Map() })).firings).toEqual([]);
+    const r2 = scheduler.tick(ctx(t + 2, { baselineX: state.x, mirror: new Map() }));
+    expect(r2.firings.map((f) => [f.event.id, f.phase, f.signalled])).toEqual([['player-1', 'shock', true]]);
+  });
+
+  it('player world: a signalled shock that fails its preconditions is averted once, stays pending and is mirrored inversely', () => {
+    const base = setup(true);
+    const player = setup(false);
+    const u = player.store.countryIndex.get('U')!, stab = player.store.indicatorIndex.get('stability')!;
+    const mirrored = (t: number) => player.ctx(t, { baselineX: base.state.x, mirror: base.scheduler.firedAt(t) });
+    base.scheduler.tick(base.ctx(T_SPLIT - 6)); // dissolution: leadMonths 6
+    const r = player.scheduler.tick(mirrored(T_SPLIT - 6));
+    expect(r.firings.map((f) => [f.event.id, f.phase, f.mode])).toEqual([['fx-u-split-1990', 'signal', 'embedded']]);
+    player.state.x[player.state.idx(stab, u)] = 90; // propped up after the warning
+    base.scheduler.tick(base.ctx(T_SPLIT));
+    const r2 = player.scheduler.tick(mirrored(T_SPLIT));
+    expect(r2.averted).toEqual(['fx-u-split-1990']);
+    expect(r2.delayed).toEqual(['fx-u-split-1990']);
+    expect(r2.firings.map((f) => [f.event.id, f.phase, f.mode])).toEqual([['fx-u-split-1990', 'shock', 'inverse']]);
+    base.scheduler.tick(base.ctx(T_SPLIT + 1));
+    const r3 = player.scheduler.tick(mirrored(T_SPLIT + 1));
+    expect(r3.averted).toEqual([]); // reported once
+    expect(r3.delayed).toEqual(['fx-u-split-1990']);
+  });
+
+  it('skips the signal of an event added after its signal month and strikes it unsignalled', () => {
+    const { scheduler, ctx, state } = setup(false);
+    const t = absMonth(1983, 1);
+    scheduler.tick(ctx(t, { baselineX: state.x, mirror: new Map() }));
+    scheduler.add({ id: 'late', type: 'banking_crisis', origin: 'real-A', year: 1983, month: 3, countries: ['A'], scope: 'list', magnitude: 3, preconditions: [], delayMaxYears: 5, hooks: [] }); // its signal month, 1982-12, is behind
+    expect(scheduler.tick(ctx(t + 1, { baselineX: state.x, mirror: new Map() })).firings).toEqual([]);
+    const r = scheduler.tick(ctx(t + 2, { baselineX: state.x, mirror: new Map() }));
+    expect(r.firings.map((f) => [f.event.id, f.phase, f.signalled])).toEqual([['late', 'shock', false]]);
+  });
+
+  it('player world: an event diverged at its signal never strikes and is never subtracted', () => {
+    const base = setup(true);
+    const player = setup(false); // U active, U1 not born
+    const crash: ScheduledEvent = { id: 'crash-u1', type: 'banking_crisis', origin: 'real-A', year: 1990, month: 6, countries: ['U1'], scope: 'list', magnitude: 3, preconditions: [], delayMaxYears: 5, hooks: [] };
+    base.scheduler.add(crash);
+    player.scheduler.add(crash);
+    for (const t of [absMonth(1990, 3), absMonth(1990, 6)]) {
+      base.scheduler.tick(base.ctx(t));
+      const r = player.scheduler.tick(player.ctx(t, { baselineX: base.state.x, mirror: base.scheduler.firedAt(t), handover: player.handover }));
+      expect(r.diverged).toEqual(t === absMonth(1990, 3) ? ['crash-u1'] : []);
+      expect(r.firings.filter((f) => f.event.id === 'crash-u1')).toEqual([]);
+    }
+  });
+
   it('evaluates eventFired predicates', () => {
     const { scheduler, ctx, state } = setup(false);
     scheduler.add({ id: 'dep', type: 'protests', origin: 'real-A', year: 1980, month: 6, countries: ['A'], scope: 'list', magnitude: 2, preconditions: [{ kind: 'eventFired', event: 'root', fired: true }], delayMaxYears: 1, hooks: [] });
@@ -2494,9 +2609,10 @@ import type { WorldState } from '../state.js';
 import type { ChannelPoints, Scorer } from './catalog.js';
 
 export type ApplyMode = 'embedded' | 'forward' | 'inverse';
+export type Phase = 'signal' | 'shock';
 
 export interface ActiveEvent {
-  id: string;
+  id: string; // `${event.id}#signal` for a signal
   typeId: string;
   countries: number[];
   global: boolean;
@@ -2506,24 +2622,34 @@ export interface ActiveEvent {
   persistMonths: number;
   persistRatio: number;
   mode: ApplyMode;
+  phase: Phase;
   spreadBias: Partial<Record<LinkType, number>>;
+}
+
+export interface ActivePhase {
+  phase: Phase;
+  infoFactor: number; // share of the info points this phase delivers: the signal takes `signal.infoShare`, a signalled shock the rest, a bare shock all
 }
 
 export function makeActiveEvent(
   ev: ScheduledEvent, countries: number[], scorer: Scorer, mode: ApplyMode, startAbs: number,
+  at: ActivePhase = { phase: 'shock', infoFactor: 1 },
 ): ActiveEvent {
   const def = scorer.def(ev.type);
+  const pts = scorer.score(ev, { t: startAbs, countries });
+  const signal = at.phase === 'signal';
   return {
-    id: ev.id,
+    id: signal ? `${ev.id}#signal` : ev.id,
     typeId: ev.type,
     countries,
     global: ev.scope === 'global',
-    points: scorer.score(ev, { t: startAbs, countries }),
+    points: signal ? { econ: 0, safety: 0, health: 0, info: pts.info * at.infoFactor } : { ...pts, info: pts.info * at.infoFactor },
     startAbs,
-    shockMonths: ev.shockMonths ?? def.shockMonths,
-    persistMonths: ev.persistMonths ?? def.persistMonths,
+    shockMonths: signal ? 1 : ev.shockMonths ?? def.shockMonths,
+    persistMonths: signal ? 0 : ev.persistMonths ?? def.persistMonths,
     persistRatio: def.persistRatio,
     mode,
+    phase: at.phase,
     spreadBias: def.spreadBias,
   };
 }
@@ -2611,7 +2737,7 @@ import { absMonth, fromAbs, type Country, type EventGroup, type FollowUp, type P
 import type { LinkGraph } from '../graph.js';
 import { chance } from '../rng.js';
 import type { WorldState } from '../state.js';
-import type { ApplyMode } from './impact.js';
+import type { ApplyMode, Phase } from './impact.js';
 
 /** Player world only: what to do with a real event whose country does not exist in this world (ADR 0005). */
 export interface HandoverContext {
@@ -2628,13 +2754,18 @@ export interface SchedulerContext {
   countryIndex: Map<string, number>;
   indicatorIndex: Map<string, number>;
   graph: LinkGraph;
-  mirror?: Map<string, ScheduledEvent>; // what the baseline fired this tick (player world only)
+  mirror?: Map<string, Firing>; // what the baseline fired this tick, by phaseKey (player world only)
   handover?: HandoverContext;
 }
+
+/** Mirror and firedAt key: a signal and its shock are mirrored separately (ADR 0006). */
+export const phaseKey = (id: string, phase: Phase): string => (phase === 'signal' ? `${id}#signal` : id);
 
 export interface Firing {
   event: ScheduledEvent;
   mode: ApplyMode;
+  phase: Phase;
+  signalled: boolean; // shock only: its signal went out earlier, so the shock delivers the rest of the info points
 }
 export interface Retarget {
   id: string;
@@ -2643,70 +2774,137 @@ export interface Retarget {
 }
 export interface TickResult {
   firings: Firing[];
+  signalled: string[];
   delayed: string[];
+  averted: string[]; // a signalled shock that failed its preconditions in its month; reported once, the event stays pending
   cancelled: string[];
   retargeted: Retarget[]; // «в реальности: …»
   diverged: string[]; // «история пошла иначе»
 }
 
+export interface SchedulerOptions {
+  isBaseline: boolean;
+  seed: number;
+  startAbs?: number; // signals dated before the run start are skipped; default: nothing skipped
+  leadOf?: (type: string) => number; // catalog leadMonths per type; default 0
+}
+
 export const eventAbs = (e: ScheduledEvent): number => absMonth(e.year, e.month);
 
-export class Scheduler {
-  private readonly byMonth = new Map<number, ScheduledEvent[]>();
-  private pending: ScheduledEvent[] = [];
-  private readonly firedByTick = new Map<number, Map<string, ScheduledEvent>>();
-  readonly fired = new Set<string>();
+interface Entry {
+  event: ScheduledEvent;
+  shockAbs: number;
+  signalled: boolean;
+  averted: boolean;
+  dropped: boolean; // diverged at the signal: the shock never comes
+}
 
-  constructor(events: ScheduledEvent[], private readonly opts: { isBaseline: boolean; seed: number }) {
+function push(map: Map<number, Entry[]>, abs: number, entry: Entry): void {
+  const list = map.get(abs);
+  if (list) list.push(entry);
+  else map.set(abs, [entry]);
+}
+
+export class Scheduler {
+  private readonly signals = new Map<number, Entry[]>();
+  private readonly shocks = new Map<number, Entry[]>();
+  private pending: Entry[] = [];
+  private readonly firedByTick = new Map<number, Map<string, Firing>>();
+  private readonly divergedIds = new Set<string>();
+  private now: number;
+  readonly fired = new Set<string>(); // shocks only
+
+  constructor(events: ScheduledEvent[], private readonly opts: SchedulerOptions) {
+    this.now = opts.startAbs ?? Number.NEGATIVE_INFINITY;
     for (const e of events) this.add(e);
   }
 
+  /** Dated events (real, hook) carry their shock month and are signalled leadMonths earlier; fresh ones (player, generated)
+   *  carry the month they enter the world: the signal is that month, the shock leadMonths later. A signal month already
+   *  behind the scheduler is skipped: the shock then goes out unsignalled, with all its points. */
   add(e: ScheduledEvent): void {
-    const abs = eventAbs(e);
-    const list = this.byMonth.get(abs);
-    if (list) list.push(e);
-    else this.byMonth.set(abs, [e]);
+    const lead = e.leadMonths ?? this.opts.leadOf?.(e.type) ?? 0;
+    const fresh = e.origin === 'player' || e.origin === 'generated';
+    const date = eventAbs(e);
+    const entry: Entry = { event: e, shockAbs: fresh ? date + lead : date, signalled: false, averted: false, dropped: false };
+    push(this.shocks, entry.shockAbs, entry);
+    if (lead > 0 && entry.shockAbs - lead >= this.now) push(this.signals, entry.shockAbs - lead, entry);
   }
 
-  firedAt(t: number): Map<string, ScheduledEvent> {
+  firedAt(t: number): Map<string, Firing> {
     return this.firedByTick.get(t) ?? new Map();
   }
 
   tick(ctx: SchedulerContext): TickResult {
     const t = ctx.t;
-    const firedNow = new Map<string, ScheduledEvent>();
+    const firedNow = new Map<string, Firing>();
     this.firedByTick.set(t, firedNow);
-    const result: TickResult = { firings: [], delayed: [], cancelled: [], retargeted: [], diverged: [] };
-    const diverged = new Set<string>();
-    // New events first (in file order), then re-checked pending ones: lets same-month dependencies resolve.
-    const due = [...(this.byMonth.get(t) ?? []), ...this.pending];
+    const result: TickResult = { firings: [], signalled: [], delayed: [], averted: [], cancelled: [], retargeted: [], diverged: [] };
+    const signals = this.signals.get(t) ?? [];
+    // New shocks first (in file order), then re-checked pending ones: lets same-month dependencies resolve.
+    const due = [...(this.shocks.get(t) ?? []), ...this.pending];
     this.pending = [];
+    this.now = t + 1;
 
-    for (const e of due) {
+    for (const entry of signals) {
+      const e = entry.event;
       const moved = this.opts.isBaseline ? null : this.handover(e, ctx);
       if (moved === 'diverged') {
-        diverged.add(e.id);
-        result.diverged.push(e.id);
+        entry.dropped = true;
+        this.diverge(e.id, result);
+        continue;
+      }
+      const ev = moved ?? e;
+      entry.signalled = true;
+      this.emit({ event: ev, mode: moved ? 'forward' : this.modeOf(e.id, 'signal', ctx), phase: 'signal', signalled: false }, firedNow, result);
+      result.signalled.push(e.id);
+      if (moved) result.retargeted.push({ id: e.id, from: e.countries[0]!, to: moved.countries[0]! });
+    }
+
+    for (const entry of due) {
+      if (entry.dropped) continue;
+      const e = entry.event;
+      const moved = this.opts.isBaseline ? null : this.handover(e, ctx);
+      if (moved === 'diverged') {
+        this.diverge(e.id, result);
         continue;
       }
       const ev = moved ?? e;
       if (this.opts.isBaseline || this.passes(ev, ctx)) {
-        this.fire(ev, ctx, firedNow, result, moved ? 'forward' : undefined);
+        this.fire(ev, ctx, firedNow, result, entry.signalled, moved ? 'forward' : undefined);
         if (moved) result.retargeted.push({ id: e.id, from: e.countries[0]!, to: moved.countries[0]! });
-      } else if (t - eventAbs(e) >= e.delayMaxYears * 12) {
+      } else if (t - entry.shockAbs >= e.delayMaxYears * 12) {
         result.cancelled.push(e.id);
       } else {
-        this.pending.push(e); // the original: handover is decided afresh on every tick
+        if (entry.signalled && !entry.averted) {
+          entry.averted = true;
+          result.averted.push(e.id);
+        }
+        this.pending.push(entry); // the original: handover is decided afresh on every tick
         result.delayed.push(e.id);
       }
     }
 
     if (!this.opts.isBaseline && ctx.mirror) {
-      for (const [id, e] of ctx.mirror) {
-        if (!firedNow.has(id) && !diverged.has(id)) result.firings.push({ event: e, mode: 'inverse' });
+      for (const [key, f] of ctx.mirror) {
+        if (!firedNow.has(key) && !this.divergedIds.has(f.event.id)) result.firings.push({ ...f, mode: 'inverse' });
       }
     }
     return result;
+  }
+
+  private diverge(id: string, result: TickResult): void {
+    this.divergedIds.add(id);
+    result.diverged.push(id);
+  }
+
+  private modeOf(id: string, phase: Phase, ctx: SchedulerContext): ApplyMode {
+    return this.opts.isBaseline || (ctx.mirror?.has(phaseKey(id, phase)) ?? false) ? 'embedded' : 'forward';
+  }
+
+  private emit(f: Firing, firedNow: Map<string, Firing>, result: TickResult): void {
+    firedNow.set(phaseKey(f.event.id, f.phase), f);
+    result.firings.push(f);
   }
 
   /** null = fire as is; 'diverged' = drop; otherwise the same event re-addressed to the territory holders. */
@@ -2739,11 +2937,9 @@ export class Scheduler {
     return null;
   }
 
-  private fire(e: ScheduledEvent, ctx: SchedulerContext, firedNow: Map<string, ScheduledEvent>, result: TickResult, forced?: ApplyMode): void {
+  private fire(e: ScheduledEvent, ctx: SchedulerContext, firedNow: Map<string, Firing>, result: TickResult, signalled: boolean, forced?: ApplyMode): void {
     this.fired.add(e.id);
-    firedNow.set(e.id, e);
-    const mirrored = this.opts.isBaseline || (ctx.mirror?.has(e.id) ?? false);
-    result.firings.push({ event: e, mode: forced ?? (mirrored ? 'embedded' : 'forward') });
+    this.emit({ event: e, mode: forced ?? this.modeOf(e.id, 'shock', ctx), phase: 'shock', signalled }, firedNow, result);
     e.hooks.forEach((h, idx) => {
       if (!chance(h.probability, this.opts.seed, 'hook', e.id, idx)) return;
       const countries = this.resolveTargets(h, e, ctx);
@@ -2861,7 +3057,7 @@ Run: `pnpm test packages/engine && pnpm typecheck` → PASS.
 
 ```bash
 git add packages/engine
-git commit -m "feat(engine): catalog scorer, embedded/forward/inverse impact, mirrored scheduler with handover, border transitions"
+git commit -m "feat(engine): catalog scorer, embedded/forward/inverse impact, mirrored scheduler with signal/shock phases and handover, border transitions"
 ```
 
 ---
@@ -2877,9 +3073,9 @@ git commit -m "feat(engine): catalog scorer, embedded/forward/inverse impact, mi
 - Produces:
   - `class Trend implements RealSource { constructor(store, countries, analogs) }` — внутри срока жизни страны отдаёт данные как есть; после `country.to` синтезирует `real[end] + scale × (analog[t − shift] − analog[end − shift])` по записи из `analogs`, а без записи — по медиане приращений стран того же субрегиона, существующих в оба месяца (ADR 0005). Синтетические значения кэшируются по `(i, c)`; считаются только для стран, которые в каком-то мире пережили свой конец.
   - `interface Hazard { id; type; magnitude; rate(ctx: HazardContext, c): number }` (месячная вероятность до ворот), `interface HazardContext { t; state; countries; indicatorIndex }`, `interface GenerationGate { isBaseline; todayAbs; liveHistory; gamma; divergence?: Float32Array }`, `gateFactor(gate, c, t)` = `1` после «сегодня», `0` в базовой линии до «сегодня», иначе `max(liveHistory, divergence[c]^gamma)` (ADR 0004), `generateEvents(hazards, ctx, gate, seed): ScheduledEvent[]` — id `gen-<hazard>-<country>-<t>`, `origin: 'generated'`, монета `chance(rate × gate, seed, 'gen', hazard, country, t)`. В этапе 0 список функций риска пуст: тесты проверяют ворота и детерминизм на заглушках.
-  - `interface WorldShared { store; trend: Trend; countries: Country[]; params; graph; scorer; channels; engine; transitions: Map<string, Transition>; countryIndex; indicatorIndex; hazards: Hazard[]; liveHistory; todayAbs; seed }`.
-  - `interface LogEntry { t: number; kind: 'fired' | 'inverse' | 'delayed' | 'cancelled' | 'transition' | 'retargeted' | 'diverged'; id: string; mode?: ApplyMode; from?: string; to?: string }`.
-  - `class SimWorld { state: WorldState; scheduler: Scheduler; journal: Journal; active: ActiveEvent[]; log: LogEntry[]; step(t, mirror?: Mirror) }`, `interface Mirror { x: Float32Array; fired: Map<string, ScheduledEvent>; divergence: Float32Array }`. Мир игрока получает контекст передачи модели; базовая линия — нет.
+  - `interface WorldShared { store; trend: Trend; countries: Country[]; params; graph; scorer; channels; engine; transitions: Map<string, Transition>; countryIndex; indicatorIndex; hazards: Hazard[]; liveHistory; todayAbs; startAbs; seed }`.
+  - `interface LogEntry { t: number; kind: 'signalled' | 'fired' | 'inverse' | 'delayed' | 'averted' | 'cancelled' | 'transition' | 'retargeted' | 'diverged'; id: string; mode?: ApplyMode; phase?: Phase; from?: string; to?: string }` (`phase: 'signal'` у записей сигнала, включая `inverse` сигнала).
+  - `class SimWorld { state: WorldState; scheduler: Scheduler; journal: Journal; active: ActiveEvent[]; log: LogEntry[]; step(t, mirror?: Mirror) }`, `interface Mirror { x: Float32Array; fired: Map<string, Firing>; divergence: Float32Array }`. Планировщик мира получает `startAbs` и `leadOf` из каталога; сигнал кладёт `makeActiveEvent(…, { phase: 'signal', infoFactor: engine.signal.infoShare })`, удар после сигнала `infoFactor: 1 − infoShare`, удар без сигнала `1`; переход применяется только на ударе. Мир игрока получает контекст передачи модели; базовая линия — нет.
   - `interface SimOptions { dataset: Dataset; content: Content; seed: number; startYear: number; endYear?: number; liveHistory?: number; hazards?: Hazard[]; scorer?: Scorer }` (endYear по умолчанию 2050, liveHistory 0, hazards пусто, scorer — каталог контента).
   - `class Simulation { t; startAbs; endAbs; todayAbs; baseline: SimWorld; player: SimWorld; interventions: PlayerEvent[]; static create(opts); step(): boolean; runTo(abs); run(); apply(ev: PlayerEvent): string; divergence(): { world: number; byCountry: Float32Array }; snapshot(): Snapshot; stateHash(): { baseline: number; player: number }; serializeRun(): RunRecord; static restoreRun(dataset, content, run, hazards?): Simulation }`.
   - Расхождение страны: RMS разницы индексов через `1 − exp(−rms/σ)`, если страна активна в обоих мирах; `1`, если только в одном (ADR 0005; вес — население того мира, где она есть); страны, которых нет нигде, не считаются.
@@ -3054,6 +3250,23 @@ describe('Simulation', () => {
     expect(s.player.state.active[u]).toBe(1);
     expect(s.player.log.some((l) => l.kind === 'delayed' && l.id === 'fx-u-split-1990')).toBe(true);
     expect(s.player.log.some((l) => l.kind === 'inverse' && l.id === 'fx-u-split-1990')).toBe(true);
+    // the warning went out in both worlds six months earlier (dissolution: leadMonths 6); the player world then averted the shock
+    for (const w of [s.baseline, s.player]) expect(w.log.some((l) => l.kind === 'signalled' && l.id === 'fx-u-split-1990' && l.t === absMonth(1989, 7))).toBe(true);
+    expect(s.player.log.filter((l) => l.kind === 'averted').map((l) => [l.id, l.t])).toEqual([['fx-u-split-1990', absMonth(1990, 1)]]);
+    expect(s.baseline.log.some((l) => l.kind === 'averted')).toBe(false);
+  });
+
+  it('an intervention is signalled the month it is thrown and strikes leadMonths later', () => {
+    const s = make(3);
+    s.apply({ type: 'investment', country: 'A', magnitude: 3, year: 1983, month: 1 }); // investment: leadMonths 2, no info points
+    s.runTo(absMonth(1983, 3));
+    const entries = () => s.player.log.filter((l) => l.id === 'player-1').map((l) => [l.kind, l.t]);
+    expect(entries()).toEqual([['signalled', absMonth(1983, 1)]]);
+    expect(s.stateHash().player).toBe(s.stateHash().baseline); // a headline only: nothing has struck yet
+    s.runTo(absMonth(1983, 4));
+    expect(entries()).toEqual([['signalled', absMonth(1983, 1)], ['fired', absMonth(1983, 3)]]);
+    expect(s.stateHash().player).not.toBe(s.stateHash().baseline);
+    expect(s.baseline.log.filter((l) => l.id === 'player-1')).toEqual([]);
   });
 
   it('a country alive in one world only counts as fully diverged, weighted by its own population', () => {
@@ -3305,8 +3518,8 @@ export function generateEvents(hazards: Hazard[], ctx: HazardContext, gate: Gene
 import type { ChannelMap, Country, EngineConfig, ScheduledEvent, Transition } from '@ripple/schema';
 import { stepIndicators, type DynParams } from './dynamics.js';
 import type { Scorer } from './events/catalog.js';
-import { applyActiveEvents, isExpired, makeActiveEvent, type ActiveEvent, type ApplyMode } from './events/impact.js';
-import { Scheduler, type HandoverContext } from './events/schedule.js';
+import { applyActiveEvents, isExpired, makeActiveEvent, type ActiveEvent, type ApplyMode, type Phase } from './events/impact.js';
+import { Scheduler, type Firing, type HandoverContext } from './events/schedule.js';
 import type { LinkGraph } from './graph.js';
 import { generateEvents, type Hazard } from './hazards.js';
 import { Journal } from './journal.js';
@@ -3330,21 +3543,23 @@ export interface WorldShared {
   hazards: Hazard[];
   liveHistory: number;
   todayAbs: number;
+  startAbs: number;
   seed: number;
 }
 
 export interface LogEntry {
   t: number;
-  kind: 'fired' | 'inverse' | 'delayed' | 'cancelled' | 'transition' | 'retargeted' | 'diverged';
+  kind: 'signalled' | 'fired' | 'inverse' | 'delayed' | 'averted' | 'cancelled' | 'transition' | 'retargeted' | 'diverged';
   id: string;
   mode?: ApplyMode;
+  phase?: Phase; // 'signal' on a signal firing (signalled, or the inverse of a signal); absent on shocks
   from?: string; // retargeted: where the event stood in reality («в реальности: …»)
   to?: string; // retargeted: the holder it moved to
 }
 
 export interface Mirror {
   x: Float32Array;
-  fired: Map<string, ScheduledEvent>;
+  fired: Map<string, Firing>; // by phaseKey: signals and shocks are mirrored separately
   divergence: Float32Array;
 }
 
@@ -3356,7 +3571,9 @@ export class SimWorld {
   readonly log: LogEntry[] = [];
 
   constructor(readonly shared: WorldShared, readonly state: WorldState, events: ScheduledEvent[], readonly isBaseline: boolean) {
-    this.scheduler = new Scheduler(events, { isBaseline, seed: shared.seed });
+    this.scheduler = new Scheduler(events, {
+      isBaseline, seed: shared.seed, startAbs: shared.startAbs, leadOf: (type) => shared.scorer.def(type).leadMonths,
+    });
     this.journal = new Journal(shared.engine.journal);
     this.handover = isBaseline
       ? undefined
@@ -3378,11 +3595,13 @@ export class SimWorld {
       graph: sh.graph, mirror: mirror?.fired, handover: this.handover,
     });
     for (const id of res.delayed) this.log.push({ t, kind: 'delayed', id });
+    for (const id of res.averted) this.log.push({ t, kind: 'averted', id });
     for (const id of res.cancelled) this.log.push({ t, kind: 'cancelled', id });
     for (const id of res.diverged) this.log.push({ t, kind: 'diverged', id });
     for (const r of res.retargeted) this.log.push({ t, kind: 'retargeted', id: r.id, from: r.from, to: r.to });
-    for (const { event, mode } of res.firings) {
-      if (mode !== 'inverse' && event.transition) {
+    const share = sh.engine.signal.infoShare;
+    for (const { event, mode, phase, signalled } of res.firings) {
+      if (phase === 'shock' && mode !== 'inverse' && event.transition) {
         const tr = sh.transitions.get(event.transition);
         if (!tr) throw new Error(`event ${event.id}: unknown transition ${event.transition}`);
         applyTransition(tr, this.state, sh.trend, sh.countryIndex, t);
@@ -3391,8 +3610,11 @@ export class SimWorld {
       const countries = event.scope === 'global'
         ? Array.from(this.state.active, (a, c) => (a === 1 ? c : -1)).filter((c) => c >= 0)
         : event.countries.map((id) => sh.countryIndex.get(id)).filter((c): c is number => c !== undefined);
-      this.active.push(makeActiveEvent(event, countries, sh.scorer, mode, t));
-      this.log.push({ t, kind: mode === 'inverse' ? 'inverse' : 'fired', id: event.id, mode });
+      // The signal carries `infoShare` of the info points; a shock that follows a signal carries the rest; a bare shock carries all.
+      const infoFactor = phase === 'signal' ? share : signalled ? 1 - share : 1;
+      this.active.push(makeActiveEvent(event, countries, sh.scorer, mode, t, { phase, infoFactor }));
+      const kind = mode === 'inverse' ? 'inverse' : phase === 'signal' ? 'signalled' : 'fired';
+      this.log.push(phase === 'signal' ? { t, kind, id: event.id, mode, phase } : { t, kind, id: event.id, mode });
     }
     applyActiveEvents(this.active, t, {
       state: this.state, params: sh.params, meta: sh.store.meta, countries: sh.countries, indicatorIndex: sh.indicatorIndex,
@@ -3493,6 +3715,7 @@ export class Simulation {
       hazards: opts.hazards ?? [],
       liveHistory,
       todayAbs: dataset.meta.todayAbs,
+      startAbs,
       seed: opts.seed,
     };
     const events = content.events.filter((e) => absMonth(e.year, e.month) >= startAbs);
@@ -5024,6 +5247,9 @@ export type Normalization = z.infer<typeof Normalization>;
 {
   "journal": { "maxTicks": 1200, "topPerTick": 400, "minAbs": 0.01 },
   "spill": { "ringFactor": 0.25, "rings": { "econ": 2, "safety": 1, "health": 1, "info": 1 } },
+  "generation": { "gamma": 1.5 },
+  "handover": { "retarget": ["nature"] },
+  "signal": { "infoShare": 0.5 },
   "horizon": { "firstYear": 1980, "lastYear": 2100 },
   "divergenceSigma": 40
 }
@@ -5664,7 +5890,7 @@ Run: `pnpm ripple validate --data packages/data/out`
 Expected: `0 errors, W warnings`; предупреждения вида `<code>: more than half of countries are estimated` недопустимы — тогда проверить парсер соответствующего источника.
 
 Run: `pnpm ripple run --data packages/data/out --from 1980 --to 2025 --seed 1 --out /tmp/baseline.json && node -e "const r=require('/tmp/baseline.json'); console.log(r.elapsedMs.toFixed(0)+' ms', r.divergence.world, r.log.baseline.filter(l=>l.kind==='fired').length+' fired', r.log.baseline.filter(l=>l.kind!=='fired').map(l=>l.kind+':'+l.id).join(' '))"`
-Expected: время ≤ 3000 мс, `divergence 0`, число `fired` ≥ 57 (все события яруса A до 2025 плюс хуки), среди остальных записей — только `transition:…` (одиннадцать штук), ни `delayed`, ни `cancelled`, ни `diverged`, ни `retargeted`.
+Expected: время ≤ 3000 мс, `divergence 0`, число `fired` ≥ 57 (все события яруса A до 2025 плюс хуки), среди остальных записей — только `transition:…` (одиннадцать штук) и `signalled:…` (по одной на каждое событие с опережением, в том числе `signalled:ussr-dissolution-1991` за полгода до `fired`), ни `delayed`, ни `averted`, ни `cancelled`, ни `diverged`, ни `retargeted`.
 
 - [ ] **Step 6: Закоммитить (вместе с данными)**
 
@@ -5813,7 +6039,9 @@ describe('real dataset', () => {
     const due = content.events.filter((e) => e.year < 2025).map((e) => e.id);
     expect(due.filter((id) => !fired.has(id))).toEqual([]);
     expect(sim.baseline.log.filter((l) => l.kind === 'delayed' || l.kind === 'cancelled')).toEqual([]);
-    expect(sim.player.log.filter((l) => l.kind === 'delayed' || l.kind === 'cancelled' || l.kind === 'diverged' || l.kind === 'retargeted')).toEqual([]);
+    expect(sim.player.log.filter((l) => l.kind === 'delayed' || l.kind === 'averted' || l.kind === 'cancelled' || l.kind === 'diverged' || l.kind === 'retargeted')).toEqual([]);
+    expect(sim.player.log.filter((l) => l.kind === 'signalled').map((l) => [l.id, l.t])).toEqual(sim.baseline.log.filter((l) => l.kind === 'signalled').map((l) => [l.id, l.t]));
+    expect(sim.baseline.log.find((l) => l.kind === 'signalled' && l.id === 'ussr-dissolution-1991')?.t).toBe(absMonth(1991, 6)); // dissolution: leadMonths 6
     const transitions = sim.baseline.log.filter((l) => l.kind === 'transition').map((l) => l.id).sort();
     expect(transitions).toEqual(content.transitions.map((t) => t.id).sort());
     const idx = (id: string) => sim.baseline.shared.countryIndex.get(id)!;
@@ -5861,6 +6089,7 @@ describe('real dataset', () => {
     expect(sim.player.state.active[sun]).toBe(1);
     expect(sim.player.state.active[rus]).toBe(0);
     expect(sim.player.log.some((l) => l.kind === 'delayed' && l.id === 'ussr-dissolution-1991')).toBe(true);
+    expect(sim.player.log.some((l) => l.kind === 'averted' && l.id === 'ussr-dissolution-1991')).toBe(true); // the warning went out in 1991-06, the shock did not come
     expect(sim.player.log.some((l) => l.kind === 'transition' && l.id === 'sun-1991')).toBe(false);
     expect(sim.player.log.find((l) => l.kind === 'retargeted')).toMatchObject({ id: 'test-quake-rus', from: 'RUS', to: 'SUN' });
     expect(sim.player.log.some((l) => l.kind === 'diverged' && l.id === 'test-crash-rus')).toBe(true);
@@ -5904,6 +6133,8 @@ pnpm data:build           # пересобрать packages/data/out из ист
 
 `--live` — «живая история» от 0 до 1: насколько мир игрока до «сегодня» может отклоняться от истории сам по себе. В этапе 0 функций риска ещё нет, поэтому ручка только хранится в ссылке-повторе.
 
+Событие живёт в две фазы (ADR 0006): сигнал (`signalled` в журнале) выходит за `leadMonths` до удара (`fired`) и трогает только канал информации; вмешательство из `--event` тоже сначала попадает в ленту сигналом и ударяет через опережение своего типа. Удар, который после сигнала не прошёл предусловия, пишется `averted`.
+
 ## Пакеты
 
 | Пакет | Что |
@@ -5944,6 +6175,7 @@ git commit -m "test: baseline fidelity, USSR counterfactual and dataset invarian
 ## Критерий готовности этапа 0
 
 - `pnpm test` зелёный без сети; `pnpm ripple run --data packages/data/out --from 1980 --to 2025 --seed 1` отдаёт `divergence 0` за ≤ 3 с.
+- Сигнал и удар (ADR 0006): каждое событие с опережением даёт `signalled` в обоих мирах за `leadMonths` до `fired`; вмешательство игрока ударяет через опережение своего типа; предотвращённый удар пишется `averted` и не ломает базовую линию.
 - Базовая линия в допуске ±5 пунктов (индексы) и ±0.02 (log10-счётчики) от реальных рядов на каждом январе 1981–2025; все события яруса A и все одиннадцать переходов срабатывают; без вмешательств ни одной записи `delayed`, `cancelled`, `diverged`, `retargeted`.
 - Три реформы в СССР 1989–1990 откладывают распад в мире игрока; базовый мир не меняется; выживший СССР идёт по аналогу (CHN × 0.6), события на России переезжают к нему (природа) или не случаются (остальное), расхождение СССР и России равно единице.
 - Каркас функций риска: ручка `--live` хранится в ссылке-повторе; с пустым списком функций риска ничего не генерируется; тесты на заглушках подтверждают ворота `max(liveHistory, расхождение^γ)` и общие случайные числа после «сегодня».
