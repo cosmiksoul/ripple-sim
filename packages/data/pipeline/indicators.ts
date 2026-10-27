@@ -138,6 +138,11 @@ export function buildGrid(inp: GridInputs): GridResult {
     if (c.to === null || c.to >= inp.lastAbs) return;
     for (let i = 0; i < codes.length; i++) slice(i, k).fill(NaN, Math.max(0, c.to + 1 - inp.firstAbs));
   });
+  // A successor has no history before it exists: fillMonthly holds its first observation flat backwards, those cells are invented.
+  inp.countries.forEach((c, k) => {
+    if (c.from === null || c.from <= inp.firstAbs) return;
+    for (let i = 0; i < codes.length; i++) slice(i, k).fill(NaN, 0, c.from - inp.firstAbs);
+  });
 
   return { meta: { countries: inp.countries.map((c) => c.id), indicators: metas, firstAbs: inp.firstAbs, lastAbs: inp.lastAbs, todayAbs }, values };
 }

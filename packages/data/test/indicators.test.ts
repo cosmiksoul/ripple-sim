@@ -101,4 +101,14 @@ describe('buildGrid', () => {
     expect(Number.isNaN(at('economy', 'UUU', 1991, 12))).toBe(true);
     expect(Number.isNaN(at('economy', 'UUU', 1991, 11))).toBe(false);
   });
+  it("cuts a successor's series before its from", () => {
+    const from = absMonth(1995, 1);
+    const cs = [...countries, country('SSS', 'S2', { from, predecessors: ['CCC'] })];
+    const g = buildGrid({ ...inputs, countries: cs });
+    const s = cs.length - 1, e = g.meta.indicators.findIndex((m) => m.code === 'economy');
+    const cell = (abs: number) => g.values[(e * cs.length + s) * nM + (abs - FIRST)]!;
+    expect(Number.isNaN(cell(from - 1))).toBe(true);
+    expect(Number.isNaN(cell(FIRST))).toBe(true);
+    expect(Number.isNaN(cell(from))).toBe(false);
+  });
 });
