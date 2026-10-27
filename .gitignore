@@ -7,3 +7,6 @@ packages/data/cache/
 *.log
 .DS_Store
 Thumbs.db
+
+# project skills: sources live in .agents/, .claude/skills holds machine-specific symlinks
+.claude/skills/
