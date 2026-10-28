@@ -60,6 +60,10 @@ export class Simulation {
     const { dataset, content } = opts;
     const endYear = opts.endYear ?? 2050;
     const liveHistory = opts.liveHistory ?? 0;
+    if (!Number.isInteger(opts.startYear)) throw new Error(`startYear must be an integer year, got ${opts.startYear}`);
+    if (!Number.isInteger(endYear)) throw new Error(`endYear must be an integer year, got ${endYear}`);
+    if (!Number.isInteger(opts.seed)) throw new Error(`seed must be an integer, got ${opts.seed}`);
+    if (opts.startYear > endYear) throw new Error(`startYear ${opts.startYear} is after endYear ${endYear}`);
     const startAbs = absMonth(opts.startYear, 1);
     const endAbs = absMonth(endYear, 12);
     if (startAbs < dataset.meta.firstAbs || endAbs > dataset.meta.lastAbs) {

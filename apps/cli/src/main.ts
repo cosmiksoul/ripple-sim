@@ -16,13 +16,37 @@ const { values } = parseArgs({
     out: { type: 'string' },
   },
 });
+const USAGE = 'usage: ripple <run|validate> --data <dir> [--from Y] [--to Y] [--seed N] [--live 0..1] [--event JSON]... [--out file]';
+function fail(message: string): never {
+  console.error(`ripple: ${message}`);
+  console.error(USAGE);
+  process.exit(2);
+}
 if (!values.data) {
-  console.error('usage: ripple <run|validate> --data <dir> [--from Y] [--to Y] [--seed N] [--live 0..1] [--event JSON]... [--out file]');
+  console.error(USAGE);
   process.exit(2);
 }
 if (command === 'run') {
-  const events = values.event.map((s) => PlayerEvent.parse(JSON.parse(s)));
-  const report = runCommand({ data: values.data, from: Number(values.from), to: Number(values.to), seed: Number(values.seed), live: Number(values.live), events, out: values.out });
+  for (const name of ['from', 'to', 'seed'] as const) {
+    if (!/^-?\d+$/.test(values[name])) fail(`--${name} must be an integer${name === 'seed' ? '' : ' year'}, got "${values[name]}"`);
+  }
+  const live = values.live.trim() === '' ? Number.NaN : Number(values.live);
+  if (!(Number.isFinite(live) && live >= 0 && live <= 1)) fail(`--live must be a number within 0..1, got "${values.live}"`);
+  const events = values.event.map((s, n) => {
+    let json: unknown;
+    try {
+      json = JSON.parse(s);
+    } catch {
+      return fail(`--event #${n + 1}: invalid JSON`);
+    }
+    const parsed = PlayerEvent.safeParse(json);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0]!;
+      return fail(`--event #${n + 1}: ${issue.path.join('.') || '(root)'} ${issue.message}`);
+    }
+    return parsed.data;
+  });
+  const report = runCommand({ data: values.data, from: Number(values.from), to: Number(values.to), seed: Number(values.seed), live, events, out: values.out });
   if (!values.out) process.stdout.write(JSON.stringify(report));
   else console.error(`divergence ${report.divergence.world.toFixed(4)} in ${report.elapsedMs.toFixed(0)} ms → ${values.out}`);
 } else if (command === 'validate') {

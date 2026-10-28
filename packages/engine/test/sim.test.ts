@@ -15,6 +15,13 @@ const propUp = (s: Simulation, id: string, abs: number) => {
 };
 
 describe('Simulation', () => {
+  it('rejects non-integer years and seeds and a reversed range', () => {
+    expect(() => make(1, 1980.5)).toThrow(/startYear|endYear|seed/);
+    expect(() => make(1, 1980, Number.NaN)).toThrow(/startYear|endYear|seed/);
+    expect(() => make(1.5)).toThrow(/startYear|endYear|seed/);
+    expect(() => make(1, 1990, 1985)).toThrow(/startYear|endYear|seed/);
+  });
+
   it('is deterministic per seed and differs across seeds', () => {
     const a = make(1), b = make(1), c = make(2);
     a.run(); b.run(); c.run();

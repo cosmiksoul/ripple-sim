@@ -36,6 +36,26 @@ describe('cli', () => {
     expect(JSON.parse(readFileSync(out, 'utf8')).run.seed).toBe(3);
   });
 
+  it('exits 2 with a one-line message on a malformed --from and on a bad --event', () => {
+    const tsx = join(ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+    const fails = (extra: string[]) => {
+      try {
+        execFileSync(process.execPath, [tsx, 'apps/cli/src/main.ts', 'run', '--data', dir, ...extra], { cwd: ROOT, encoding: 'utf8', stdio: 'pipe' });
+      } catch (e) {
+        return e as { status: number; stderr: string };
+      }
+      throw new Error('expected a non-zero exit');
+    };
+    const badFrom = fails(['--from', '198O']);
+    expect(badFrom.status).toBe(2);
+    expect(badFrom.stderr).toContain('--from');
+    expect(badFrom.stderr).not.toContain('at ');
+    const badEvent = fails(['--event', '{"type":"investment"}']);
+    expect(badEvent.status).toBe(2);
+    expect(badEvent.stderr).toContain('--event #1');
+    expect(badEvent.stderr).not.toContain('at ');
+  });
+
   it('works as a binary', () => {
     const tsx = join(ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
     const stdout = execFileSync(process.execPath, [tsx, 'apps/cli/src/main.ts', 'run', '--data', dir, '--from', '1980', '--to', '1990', '--seed', '1', '--live', '0'], { cwd: ROOT, encoding: 'utf8' });
