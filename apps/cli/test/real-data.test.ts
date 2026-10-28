@@ -61,7 +61,7 @@ describe('real dataset', () => {
       sim.runTo(t);
       const st = sim.baseline.state;
       dataset.meta.indicators.forEach((m, i) => {
-        if (m.prior || m.source === 'derived' || m.kind === 'rate' || t > m.realUntil) return;
+        if (m.prior || m.source === 'derived' || m.kind === 'rate' || t < (m.realFrom ?? dataset.meta.firstAbs) || t > m.realUntil) return;
         const tol = TOLERANCE[m.kind];
         for (let c = 0; c < store.nC; c++) {
           if (st.active[c] === 0) continue;

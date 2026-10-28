@@ -55,7 +55,7 @@ export function buildGrid(inp: GridInputs): GridResult {
   const metas: IndicatorMeta[] = new Array<IndicatorMeta>(codes.length);
   const slice = (i: number, c: number): Float32Array => values.subarray((i * nC + c) * nM, (i * nC + c + 1) * nM);
   const historicalById = new Map(inp.historical.map((e) => [e.id, e]));
-  const base = (code: string): Omit<IndicatorMeta, 'realUntil' | 'prior' | 'estimated' | 'source'> => ({ code, ...inp.config[code]! });
+  const base = (code: string): Omit<IndicatorMeta, 'realFrom' | 'realUntil' | 'prior' | 'estimated' | 'source'> => ({ code, ...inp.config[code]! });
 
   // Pass 1: sourced and prior indicators.
   codes.forEach((code, i) => {
@@ -66,7 +66,7 @@ export function buildGrid(inp: GridInputs): GridResult {
       const p = inp.priors[code];
       if (!p) throw new Error(`indicator ${code} is a prior but priors.json has no entry`);
       inp.countries.forEach((c, k) => slice(i, k).fill(p.bySubregion[c.subregion] ?? p.default));
-      metas[i] = { ...base(code), realUntil: inp.firstAbs - 1, prior: true, estimated: [], source: 'prior' };
+      metas[i] = { ...base(code), realFrom: inp.firstAbs, realUntil: inp.firstAbs - 1, prior: true, estimated: [], source: 'prior' };
       return;
     }
     const raw = inp.raw[code];
@@ -75,6 +75,7 @@ export function buildGrid(inp: GridInputs): GridResult {
     const mode = cfg.kind === 'log10count' ? 'sum' : 'weightedMean';
     const have = new Set<number>();
     let realUntil = inp.firstAbs - 1;
+    let realFrom = Number.POSITIVE_INFINITY;
     inp.countries.forEach((c, k) => {
       let yearly: Yearly | undefined = raw.get(c.id);
       const hc = historicalById.get(c.id);
@@ -89,6 +90,7 @@ export function buildGrid(inp: GridInputs): GridResult {
       if (!r) return;
       have.add(k);
       realUntil = Math.max(realUntil, Math.min(absMonth(r.lastYear, 12), inp.lastAbs));
+      realFrom = Math.min(realFrom, absMonth(r.firstYear, 1));
     });
     const estimated: string[] = [];
     inp.countries.forEach((c, k) => {
@@ -98,7 +100,7 @@ export function buildGrid(inp: GridInputs): GridResult {
       for (let m = 0; m < nM; m++) target[m] = median(peers.map((p) => slice(i, p)[m]!));
       estimated.push(c.id);
     });
-    metas[i] = { ...base(code), realUntil, prior: false, estimated, source: rule.source };
+    metas[i] = { ...base(code), realFrom: Math.max(inp.firstAbs, Number.isFinite(realFrom) ? realFrom : inp.firstAbs), realUntil, prior: false, estimated, source: rule.source };
   });
 
   // Pass 2: derived indicators.
@@ -122,7 +124,7 @@ export function buildGrid(inp: GridInputs): GridResult {
         target[m] = clamp(acc, cfg.min, cfg.max);
       }
     }
-    metas[i] = { ...base(code), realUntil: Math.min(...terms.map((t) => metas[t.j]!.realUntil)), prior: false, estimated: [], source: 'derived' };
+    metas[i] = { ...base(code), realFrom: Math.max(...terms.map((t) => metas[t.j]!.realFrom ?? inp.firstAbs)), realUntil: Math.min(...terms.map((t) => metas[t.j]!.realUntil)), prior: false, estimated: [], source: 'derived' };
   });
 
   // «Today»: the last month any observed (non-projection) source reaches. Same for every run on this dataset (ADR 0001).

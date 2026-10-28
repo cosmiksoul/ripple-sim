@@ -12,6 +12,7 @@ export const IndicatorMeta = z.object({
   stickiness: z.number().min(0).max(1),
   offsetHalflifeYears: z.number().positive(),
   noiseAmp: z.number().min(0),
+  realFrom: z.number().int().optional(), // first abs month with observed data; absent = firstAbs (fixtures)
   realUntil: z.number().int(), // last abs month with observed data
   prior: z.boolean().default(false),
   estimated: z.array(z.string()).default([]),

@@ -15,6 +15,10 @@ describe('fillMonthly', () => {
     expect(target[absMonth(1984, 7) - first]).toBe(30);
     expect(target[absMonth(1989, 12) - first]).toBe(30);
   });
+  it('fillMonthly reports its first and last observed year', () => {
+    const r = fillMonthly(new Map([[1991, 1], [1987, 2], [1995, 3]]), first, last, new Float32Array(last - first + 1));
+    expect(r).toEqual({ firstYear: 1987, lastYear: 1995 });
+  });
   it('returns null and leaves the target untouched without points', () => {
     const target = new Float32Array(3).fill(NaN);
     expect(fillMonthly(new Map(), first, first + 2, target)).toBeNull();

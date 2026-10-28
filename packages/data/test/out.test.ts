@@ -28,6 +28,13 @@ describe('packages/data/out', () => {
     expect(meta.todayAbs).toBeLessThan(absMonth(2030, 1));
     for (const m of meta.indicators) if (m.code !== 'population' && !m.prior) expect(m.realUntil, m.code).toBeLessThanOrEqual(meta.todayAbs);
   });
+  it('records the 1980s economy shelf', () => {
+    const from = (code: string) => meta.indicators.find((m) => m.code === code)!.realFrom;
+    expect(from('economy')).toBe(absMonth(1990, 1));
+    expect(from('gdp')).toBe(absMonth(1990, 1));
+    expect(from('population')).toBe(meta.firstAbs);
+    expect(meta.firstAbs).toBe(23760);
+  });
   it('hangs every territory on a modern country', () => {
     const modern = new Set(countries.filter((c) => !c.historical).map((c) => c.id));
     expect(territories.length).toBeGreaterThan(20);
