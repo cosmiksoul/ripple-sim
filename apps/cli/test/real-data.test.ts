@@ -18,7 +18,9 @@ describe('real dataset', () => {
   const store = new IndicatorStore(dataset.meta, dataset.values);
 
   it('validates', () => {
-    expect(validateCommand({ data: OUT }).errors).toEqual([]);
+    const v = validateCommand({ data: OUT });
+    expect(v.errors).toEqual([]);
+    expect(v.warnings).toEqual([]);
   });
 
   it('runs 1980→2025 within budget, fires all tier-A events and every transition', () => {

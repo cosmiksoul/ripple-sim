@@ -1,6 +1,8 @@
 import { existsAt } from '@ripple/schema';
 import { IndicatorStore } from '@ripple/engine';
+import { loadContent } from '@ripple/content';
 import { loadDataset } from './load.js';
+import { narrowContent } from './run.js';
 
 export function validateCommand(opts: { data: string }): { errors: string[]; warnings: string[] } {
   const errors: string[] = [];
@@ -26,5 +28,14 @@ export function validateCommand(opts: { data: string }): { errors: string[]; war
     }
   });
   for (const m of ds.meta.indicators) if (m.estimated.length > ds.countries.length / 2) warnings.push(`${m.code}: more than half of countries are estimated`);
+  const full = loadContent();
+  const content = narrowContent(full, ids);
+  const dropped = [
+    [full.transitions.length - content.transitions.length, 'transitions'],
+    [full.events.length - content.events.length, 'events'],
+    [Object.keys(full.analogs).length - Object.keys(content.analogs).length, 'analogs'],
+    [full.historicalCountries.length - content.historicalCountries.length, 'historical countries'],
+  ] as const;
+  for (const [n, what] of dropped) if (n > 0) warnings.push(`content: ${n} ${what} reference countries missing from the dataset`);
   return { errors, warnings };
 }
