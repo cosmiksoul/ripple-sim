@@ -20,7 +20,7 @@ describe('transitions', () => {
     applyTransition(FIXTURE_TRANSITIONS[0]!, state, store, store.countryIndex, absMonth(1990, 1));
     expect(state.active[id('U')]).toBe(0);
     expect(state.active[id('U1')]).toBe(1);
-    expect(state.x[state.idx(ind('economy'), id('U1'))]).toBeCloseTo(49, 1); // U1 real series: 44 + 0.5/yr × 10 years
+    expect(state.x[state.idx(ind('economy'), id('U1'))]).toBeCloseTo(52, 1); // U1 real series 49 (44 + 0.5/yr × 10 years) plus the carried offset 3
     expect(state.offset[state.idx(ind('economy'), id('U2'))]).toBeCloseTo(3, 5); // counterfactual deviation carries over
     expect(state.x[state.idx(ind('population'), id('U1'))]).toBeCloseTo(7.7, 3); // own real series
   });
@@ -45,9 +45,10 @@ describe('transitions', () => {
     state.offset[state.idx(pop, g)] = 0.3;
     applyTransition(FIXTURE_TRANSITIONS[2]!, state, store, store.countryIndex, t);
     expect(state.active[g]).toBe(0);
-    expect(state.x[state.idx(econ, f)]).toBeCloseTo(60, 3); // F's real series
+    expect(state.active[f]).toBe(1);
+    expect(state.x[state.idx(econ, f)]).toBeCloseTo(63, 3); // F's real series 60 plus the weighted offset 3
     expect(state.offset[state.idx(econ, f)]).toBeCloseTo(3, 5);
-    expect(state.x[state.idx(pop, f)]).toBeCloseTo(store.real(pop, f, t), 5); // F's own observed count, not the sum
+    expect(state.x[state.idx(pop, f)]).toBeCloseTo(store.real(pop, f, t) + 0.2, 5); // F's own observed count plus the weighted offset, not the sum
     expect(state.offset[state.idx(pop, f)]).toBeCloseTo(0.2, 5);
   });
 

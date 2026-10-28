@@ -8,6 +8,13 @@ function weightsOf(state: WorldState, real: RealSource, ids: number[]): number[]
   return ids.map((c) => Math.pow(10, state.x[state.idx(pop, c)]!));
 }
 
+/** Index indicators stay inside their scale; counts and rates are unbounded (same rule as `clamp` in dynamics.ts). */
+function clampIndex(real: RealSource, i: number, v: number): number {
+  const m = real.meta.indicators[i]!;
+  if (m.kind !== 'index') return v;
+  return v < m.min ? m.min : v > m.max ? m.max : v;
+}
+
 export function applyTransition(tr: Transition, state: WorldState, real: RealSource, countryIndex: Map<string, number>, t: number): void {
   const idx = (id: string): number => {
     const k = countryIndex.get(id);
@@ -29,8 +36,8 @@ export function applyTransition(tr: Transition, state: WorldState, real: RealSou
           state.x[kd] = Number.isNaN(own) ? state.x[ks]! - Math.log10(to.length + (tr.kind === 'secede' ? 9 : 0)) : own;
           state.offset[kd] = 0;
         } else {
-          // Prefer the successor's own observed value so the baseline stays on real data; carry the deviation over.
-          state.x[kd] = Number.isNaN(own) ? state.x[ks]! : own;
+          // Prefer the successor's own observed value so the baseline stays on real data; carry the deviation over, in x as well as in the offset.
+          state.x[kd] = Number.isNaN(own) ? state.x[ks]! : clampIndex(real, i, own + state.offset[ks]!);
           state.offset[kd] = state.offset[ks]!;
         }
       }
@@ -50,8 +57,9 @@ export function applyTransition(tr: Transition, state: WorldState, real: RealSou
     const fallback = kinds[i] === 'log10count'
       ? Math.log10(from.reduce((acc, c) => acc + Math.pow(10, state.x[state.idx(i, c)]!), 0))
       : from.reduce((acc, c, k) => acc + (w[k]! / wSum) * state.x[state.idx(i, c)]!, 0);
-    state.x[kd] = Number.isNaN(own) ? fallback : own;
     state.offset[kd] = from.reduce((acc, c, k) => acc + (w[k]! / wSum) * state.offset[state.idx(i, c)]!, 0);
+    state.x[kd] = Number.isNaN(own) ? fallback : clampIndex(real, i, own + state.offset[kd]!);
   }
+  state.active[dst] = 1;
   for (const c of from) if (c !== dst) state.active[c] = 0;
 }
