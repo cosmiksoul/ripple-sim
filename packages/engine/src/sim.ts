@@ -66,6 +66,8 @@ export class Simulation {
       throw new Error(`run ${opts.startYear}–${endYear} outside dataset range`);
     }
     if (!(liveHistory >= 0 && liveHistory <= 1)) throw new Error(`liveHistory must be within 0..1, got ${liveHistory}`);
+    const history = content.events.filter((e) => absMonth(e.year, e.month) < startAbs).map((e) => e.id);
+    const events = content.events.filter((e) => absMonth(e.year, e.month) >= startAbs);
     const store = new IndicatorStore(dataset.meta, dataset.values);
     const shared: WorldShared = {
       store,
@@ -83,9 +85,9 @@ export class Simulation {
       liveHistory,
       todayAbs: dataset.meta.todayAbs,
       startAbs,
+      history,
       seed: opts.seed,
     };
-    const events = content.events.filter((e) => absMonth(e.year, e.month) >= startAbs);
     const baseline = new SimWorld(shared, initState(store, dataset.countries, startAbs), events, true);
     const player = new SimWorld(shared, initState(store, dataset.countries, startAbs), events, false);
     return new Simulation(dataset, content, shared, startAbs, endAbs, baseline, player, opts.startYear, endYear);

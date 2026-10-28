@@ -192,6 +192,20 @@ describe('Scheduler', () => {
     expect(r.firings.map((f) => f.event.id).sort()).toEqual(['dep', 'root']);
   });
 
+  it('an eventFired precondition on an event dated before the run start is satisfied from history', () => {
+    const { state, ctx } = setup(false);
+    const { content } = buildFixture();
+    const scorer = new CatalogScorer(content.eventTypes);
+    const dep: ScheduledEvent = { id: 'dep', type: 'protests', origin: 'real-A', year: 1981, month: 6, countries: ['A'], scope: 'list', magnitude: 2, preconditions: [{ kind: 'eventFired', event: 'root', fired: true }], delayMaxYears: 1, hooks: [] };
+    const make = (history?: string[]) => new Scheduler([dep], { isBaseline: false, seed: 1, startAbs: absMonth(1981, 1), history, leadOf: (type) => scorer.def(type).leadMonths });
+    const t = absMonth(1981, 6);
+    const withHistory = make(['root']).tick(ctx(t, { baselineX: state.x, mirror: new Map() }));
+    expect(withHistory.firings.map((f) => f.event.id)).toContain('dep');
+    expect(withHistory.delayed).toEqual([]);
+    const without = make().tick(ctx(t, { baselineX: state.x, mirror: new Map() }));
+    expect(without.delayed).toEqual(['dep']);
+  });
+
   it('fires a hook with delayMonths 0 in the same tick, after its parent', () => {
     const { scheduler, ctx } = setup(true);
     const t = absMonth(1983, 5);

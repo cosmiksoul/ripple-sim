@@ -27,6 +27,7 @@ export interface WorldShared {
   liveHistory: number;
   todayAbs: number;
   startAbs: number;
+  history: string[]; // ids of content events dated before the run start
   seed: number;
 }
 
@@ -55,7 +56,7 @@ export class SimWorld {
 
   constructor(readonly shared: WorldShared, readonly state: WorldState, events: ScheduledEvent[], readonly isBaseline: boolean) {
     this.scheduler = new Scheduler(events, {
-      isBaseline, seed: shared.seed, startAbs: shared.startAbs, leadOf: (type) => shared.scorer.def(type).leadMonths,
+      isBaseline, seed: shared.seed, startAbs: shared.startAbs, history: shared.history, leadOf: (type) => shared.scorer.def(type).leadMonths,
     });
     this.journal = new Journal(shared.engine.journal);
     this.handover = isBaseline

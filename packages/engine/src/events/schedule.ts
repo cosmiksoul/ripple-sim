@@ -52,6 +52,7 @@ export interface SchedulerOptions {
   seed: number;
   startAbs?: number; // signals dated before the run start are skipped; default: nothing skipped
   leadOf?: (type: string) => number; // catalog leadMonths per type; default 0
+  history?: Iterable<string>; // ids of shocks that happened before the run start: history for eventFired preconditions
 }
 
 export const eventAbs = (e: ScheduledEvent): number => absMonth(e.year, e.month);
@@ -84,6 +85,7 @@ export class Scheduler {
 
   constructor(events: ScheduledEvent[], private readonly opts: SchedulerOptions) {
     this.now = opts.startAbs ?? Number.NEGATIVE_INFINITY;
+    for (const id of opts.history ?? []) this.fired.add(id);
     for (const e of events) this.add(e);
   }
 

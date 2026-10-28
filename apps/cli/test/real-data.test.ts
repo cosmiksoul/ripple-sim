@@ -42,6 +42,17 @@ describe('real dataset', () => {
     expect(sim.todayAbs).toBe(dataset.meta.todayAbs);
   });
 
+  it('a clean run does not diverge from any start year', () => {
+    for (const startYear of [1985, 1990, 1992]) {
+      const sim = Simulation.create({ dataset, content, seed: 1, startYear, endYear: 2025 });
+      sim.runTo(absMonth(2000, 12));
+      expect(sim.divergence().world, `divergence from ${startYear}`).toBe(0);
+      const allowed = new Set(['fired', 'signalled', 'transition']);
+      const bad = [...new Set(sim.player.log.map((l) => l.kind))].filter((k) => !allowed.has(k));
+      expect(bad, `offending kinds from ${startYear}`).toEqual([]);
+    }
+  });
+
   it('keeps the baseline within tolerance of the observed series', () => {
     const sim = Simulation.create({ dataset, content, seed: 1, startYear: 1980, endYear: 2025 });
     const violations: string[] = [];
